@@ -21,6 +21,7 @@ import {
   CloudOff,
   Save,
   HardDrive,
+  Type,
 } from 'lucide-react';
 import { DocumentItem, DocumentType } from '../../types';
 
@@ -37,6 +38,8 @@ interface HeaderProps {
   onToggleReadOnly: () => void;
   onOpenAndroidGuide: () => void;
   onOpenShare: () => void;
+  onOpenFontManager: () => void;
+  customFontsCount?: number;
   autoSaveStatus: 'saved' | 'saving' | 'error' | 'disabled';
   autoSaveEnabled: boolean;
   onToggleAutoSave: () => void;
@@ -57,6 +60,8 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleReadOnly,
   onOpenAndroidGuide,
   onOpenShare,
+  onOpenFontManager,
+  customFontsCount = 0,
   autoSaveStatus,
   autoSaveEnabled,
   onToggleAutoSave,
@@ -277,10 +282,26 @@ export const Header: React.FC<HeaderProps> = ({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".docx,.doc,.xlsx,.xls,.csv,.tsv,.pptx,.ppt,.pdf,.txt,.md,.html"
+            accept=".docx,.doc,.docm,.dotx,.dot,.odt,.rtf,.txt,.text,.log,.md,.markdown,.html,.htm,.xlsx,.xlsm,.xlsb,.xltx,.xltm,.xls,.xlt,.ods,.csv,.tsv,.tab,.prn,.dif,.slk,.pptx,.pptm,.potx,.potm,.ppt,.pot,.odp,.key,.pdf,.ttf,.otf,.woff,.woff2,.json"
             onChange={onUploadFile}
             className="hidden"
           />
+
+          {/* Custom Fonts Studio Button */}
+          <button
+            id="header-font-manager-btn"
+            onClick={onOpenFontManager}
+            className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-colors border border-purple-200 shadow-2xs"
+            title="Custom Typography: Install Google Fonts URL or upload font files locally saved in IndexedDB"
+          >
+            <Type className="w-3.5 h-3.5 text-purple-600" />
+            <span className="hidden sm:inline">Fonts</span>
+            {customFontsCount > 0 && (
+              <span className="bg-purple-200/80 text-purple-900 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+                {customFontsCount}
+              </span>
+            )}
+          </button>
 
           {/* Share Document Button */}
           <button

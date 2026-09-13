@@ -11,12 +11,14 @@ import {
   ExcelDocItem,
   PowerPointDocItem,
   PDFDocItem,
+  CustomFontItem,
 } from './types';
 import { getInitialDocuments } from './data/sampleDocuments';
 import { Header } from './components/common/Header';
 import { DocumentGalleryModal } from './components/common/DocumentGalleryModal';
 import { AndroidDefaultViewerModal } from './components/common/AndroidDefaultViewerModal';
 import { ShareModal } from './components/common/ShareModal';
+import { FontManagerModal } from './components/common/FontManagerModal';
 import { WordEditor } from './components/word/WordEditor';
 import { ExcelEditor } from './components/excel/ExcelEditor';
 import { PowerPointEditor } from './components/powerpoint/PowerPointEditor';
@@ -26,7 +28,10 @@ import {
   formatFileSize,
   parseExcelFile,
   parseWordFile,
+  parsePowerPointFile,
 } from './utils/fileHelpers';
+import { loadDocumentsFromDb, saveDocumentsToDb, loadSettingFromDb, saveSettingToDb } from './utils/indexedDbStorage';
+import { initializeInstalledFonts, installFontFromFile } from './utils/fontManager';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import { Upload, FileText, Smartphone, Download, Check, Sparkles, WifiOff, X } from 'lucide-react';
 
@@ -52,6 +57,8 @@ export default function App() {
     return documents[0]?.id || 'doc-word-sample';
   });
 
+  const [customFonts, setCustomFonts] = useState<CustomFontItem[]>([]);
+  const [isFontManagerOpen, setIsFontManagerOpen] = useState<boolean>(false);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [isGalleryOpen, setIsGalleryOpen] = useState<boolean>(false);
   const [isAndroidModalOpen, setIsAndroidModalOpen] = useState<boolean>(false);
@@ -73,6 +80,40 @@ export default function App() {
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(Date.now());
   const [saveToast, setSaveToast] = useState<string | null>(null);
 
+  // Load from IndexedDB (High Storage) and initialize fonts on startup
+  useEffect(() => {
+    const initStorageAndFonts = async () => {
+      try {
+        const dbDocs = await loadDocumentsFromDb();
+        if (dbDocs && dbDocs.length > 0) {
+          setDocuments(dbDocs);
+          if (!dbDocs.some((d) => d.id === activeDocumentId)) {
+            setActiveDocumentId(dbDocs[0].id);
+          }
+        } else {
+          // Seed database with initial documents
+          await saveDocumentsToDb(getInitialDocuments());
+        }
+
+        const savedAutoSave = await loadSettingFromDb<boolean>('autosave_enabled', true);
+        if (savedAutoSave !== undefined && savedAutoSave !== null) {
+          setAutoSaveEnabled(savedAutoSave);
+        }
+      } catch (err) {
+        console.warn('IndexedDB initialization notice:', err);
+      }
+
+      try {
+        const loadedFonts = await initializeInstalledFonts();
+        setCustomFonts(loadedFonts);
+      } catch (err) {
+        console.warn('Custom font load notice:', err);
+      }
+    };
+
+    initStorageAndFonts();
+  }, []);
+
   // Monitor online status
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -85,27 +126,36 @@ export default function App() {
     };
   }, []);
 
-  // Save documents logic
-  const saveDocumentsToStorage = useCallback((docsToSave: DocumentItem[]) => {
+  // Save documents logic: writes to IndexedDB for high-capacity local storage
+  const saveDocumentsToStorage = useCallback(async (docsToSave: DocumentItem[]) => {
     try {
       setAutoSaveStatus('saving');
-      const serializableDocs = docsToSave.map((doc) => {
-        if (doc.type === 'pdf') {
-          return {
-            ...doc,
-            data: {
-              ...doc.data,
-              pdfDataBuffer: undefined,
-            },
-          };
-        }
-        return doc;
-      });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableDocs));
+      // Save all documents, images, and binary attachments in high-capacity IndexedDB
+      await saveDocumentsToDb(docsToSave);
+
+      // Best-effort lightweight sync to localStorage
+      try {
+        const serializableDocs = docsToSave.map((doc) => {
+          if (doc.type === 'pdf') {
+            return {
+              ...doc,
+              data: {
+                ...doc.data,
+                pdfDataBuffer: undefined,
+              },
+            };
+          }
+          return doc;
+        });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableDocs));
+      } catch {
+        // Expected if local storage quota exceeded
+      }
+
       setAutoSaveStatus('saved');
       setLastSavedAt(Date.now());
     } catch (err) {
-      console.warn('Could not save documents to localStorage (size quota):', err);
+      console.warn('Could not save documents to IndexedDB:', err);
       setAutoSaveStatus('error');
     }
   }, []);
@@ -126,9 +176,10 @@ export default function App() {
   }, [documents, autoSaveEnabled, saveDocumentsToStorage]);
 
   // Toggle Auto-save handler
-  const handleToggleAutoSave = () => {
+  const handleToggleAutoSave = async () => {
     const nextVal = !autoSaveEnabled;
     setAutoSaveEnabled(nextVal);
+    await saveSettingToDb('autosave_enabled', nextVal);
     try {
       localStorage.setItem('universal_docs_autosave_enabled', JSON.stringify(nextVal));
     } catch (err) {
@@ -144,7 +195,7 @@ export default function App() {
   // Manual save handler (Save Now / Ctrl+S)
   const handleManualSave = useCallback(() => {
     saveDocumentsToStorage(documents);
-    setSaveToast('All changes saved to device storage!');
+    setSaveToast('All changes saved to IndexedDB storage!');
     setTimeout(() => setSaveToast(null), 3000);
   }, [documents, saveDocumentsToStorage]);
 
@@ -314,9 +365,26 @@ export default function App() {
 
   // Handle uploaded files (also called when phone opens file via Android launch queue)
   const processUploadedFile = useCallback(async (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+
+    // 1. Direct font installation if user uploads a font file (.ttf, .otf, .woff, .woff2)
+    if (['ttf', 'otf', 'woff', 'woff2'].includes(ext || '')) {
+      try {
+        const newFont = await installFontFromFile(file);
+        setCustomFonts((prev) => [...prev.filter((f) => f.id !== newFont.id), newFont]);
+        setIsFontManagerOpen(true);
+        setSaveToast(`Font "${newFont.name}" installed locally to IndexedDB!`);
+        setTimeout(() => setSaveToast(null), 4000);
+        return;
+      } catch (err: any) {
+        alert(err.message || `Failed to install font "${file.name}"`);
+        return;
+      }
+    }
+
     const docType = detectDocumentType(file.name);
     if (!docType) {
-      alert(`Unsupported file format for "${file.name}". Please upload .docx, .xlsx, .pptx, .pdf, .csv, or .txt`);
+      alert(`Unsupported file format for "${file.name}". Supported formats include .docx, .doc, .odt, .rtf, .xlsx, .xls, .ods, .csv, .tsv, .pptx, .ppt, .odp, .pdf, and fonts (.ttf, .otf, .woff, .woff2).`);
       return;
     }
 
@@ -349,6 +417,7 @@ export default function App() {
         setDocuments((prev) => [newDoc, ...prev]);
         setActiveDocumentId(id);
       } else if (docType === 'pdf') {
+        const buffer = await file.arrayBuffer();
         const newDoc: PDFDocItem = {
           id,
           name: file.name,
@@ -357,70 +426,80 @@ export default function App() {
           fileSize: sizeStr,
           data: {
             fileName: file.name,
-            pageCount: 2,
+            pageCount: 1,
             currentPage: 1,
             scale: 1.0,
             rotation: 0,
             annotations: [],
+            pdfDataBuffer: new Uint8Array(buffer),
           },
         };
         setDocuments((prev) => [newDoc, ...prev]);
         setActiveDocumentId(id);
       } else if (docType === 'powerpoint') {
+        const pptData = await parsePowerPointFile(file);
         const newDoc: PowerPointDocItem = {
           id,
           name: file.name,
           type: 'powerpoint',
           lastModified: Date.now(),
           fileSize: sizeStr,
-          data: {
-            aspectRatio: '16:9',
-            activeSlideIndex: 0,
-            slides: [
-              {
-                id: `slide-import-${Date.now()}`,
-                title: file.name.replace(/\.[^/.]+$/, ''),
-                bgColor: '#ffffff',
-                textColor: '#0f172a',
-                elements: [
-                  {
-                    id: `el-title-${Date.now()}`,
-                    type: 'title',
-                    x: 8,
-                    y: 20,
-                    width: 84,
-                    height: 20,
-                    content: file.name.replace(/\.[^/.]+$/, ''),
-                    fontSize: 32,
-                    fontWeight: 'bold',
-                    fontColor: '#0f172a',
-                    align: 'left',
-                  },
-                  {
-                    id: `el-text-${Date.now()}`,
-                    type: 'text',
-                    x: 8,
-                    y: 45,
-                    width: 80,
-                    height: 25,
-                    content: 'Presentation successfully imported. You can add new slides, elements, themes, and present.',
-                    fontSize: 16,
-                    fontColor: '#475569',
-                    align: 'left',
-                  },
-                ],
-              },
-            ],
-          },
+          data: pptData,
         };
         setDocuments((prev) => [newDoc, ...prev]);
         setActiveDocumentId(id);
       }
+      setSaveToast(`Opened "${file.name}" & saved to IndexedDB`);
+      setTimeout(() => setSaveToast(null), 3000);
     } catch (err) {
       console.error('Failed to parse document:', err);
       alert(`Could not parse ${file.name}. Please ensure it is a valid document.`);
     }
   }, []);
+
+  // Quick font application to the currently active document
+  const handleApplyFontToActiveDoc = (fontFamily: string) => {
+    if (!activeDocument) return;
+    if (activeDocument.type === 'word') {
+      const updated = {
+        ...activeDocument,
+        data: {
+          ...activeDocument.data,
+          fontFamily,
+        },
+      } as WordDocItem;
+      handleUpdateDocument(updated);
+    } else if (activeDocument.type === 'excel') {
+      const activeIdx = activeDocument.data.activeSheetIndex || 0;
+      const sheet = activeDocument.data.sheets[activeIdx];
+      if (sheet) {
+        const updatedCells = { ...sheet.data };
+        Object.keys(updatedCells).forEach((k) => {
+          updatedCells[k] = { ...updatedCells[k], fontFamily };
+        });
+        const updatedSheets = [...activeDocument.data.sheets];
+        updatedSheets[activeIdx] = { ...sheet, data: updatedCells };
+        handleUpdateDocument({
+          ...activeDocument,
+          data: { ...activeDocument.data, sheets: updatedSheets },
+        } as ExcelDocItem);
+      }
+    } else if (activeDocument.type === 'powerpoint') {
+      const activeIdx = activeDocument.data.activeSlideIndex || 0;
+      const slide = activeDocument.data.slides[activeIdx];
+      if (slide) {
+        const updatedElements = slide.elements.map((el) => ({ ...el, fontFamily }));
+        const updatedSlides = [...activeDocument.data.slides];
+        updatedSlides[activeIdx] = { ...slide, elements: updatedElements };
+        handleUpdateDocument({
+          ...activeDocument,
+          data: { ...activeDocument.data, slides: updatedSlides },
+        } as PowerPointDocItem);
+      }
+    }
+    setSaveToast(`Applied font "${fontFamily}" to active document`);
+    setTimeout(() => setSaveToast(null), 3000);
+  };
 
   // PWA Install and Android Launch Queue integration
   const { isInstallable, isInstalled, isAndroid, install } = usePWAInstall(processUploadedFile);
@@ -519,6 +598,8 @@ export default function App() {
         onToggleReadOnly={() => setIsReadOnly(!isReadOnly)}
         onOpenAndroidGuide={() => setIsAndroidModalOpen(true)}
         onOpenShare={() => setIsShareModalOpen(true)}
+        onOpenFontManager={() => setIsFontManagerOpen(true)}
+        customFontsCount={customFonts.length}
         autoSaveStatus={autoSaveStatus}
         autoSaveEnabled={autoSaveEnabled}
         onToggleAutoSave={handleToggleAutoSave}
@@ -536,6 +617,8 @@ export default function App() {
                 document={activeDocument as WordDocItem}
                 onChange={handleUpdateDocument}
                 isReadOnly={isReadOnly}
+                customFonts={customFonts}
+                onOpenFontManager={() => setIsFontManagerOpen(true)}
               />
             )}
 
@@ -545,6 +628,8 @@ export default function App() {
                 document={activeDocument as ExcelDocItem}
                 onChange={handleUpdateDocument}
                 isReadOnly={isReadOnly}
+                customFonts={customFonts}
+                onOpenFontManager={() => setIsFontManagerOpen(true)}
               />
             )}
 
@@ -554,6 +639,8 @@ export default function App() {
                 document={activeDocument as PowerPointDocItem}
                 onChange={handleUpdateDocument}
                 isReadOnly={isReadOnly}
+                customFonts={customFonts}
+                onOpenFontManager={() => setIsFontManagerOpen(true)}
               />
             )}
 
@@ -635,6 +722,15 @@ export default function App() {
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
         document={activeDocument}
+      />
+
+      {/* Font Manager & Local Storage Modal */}
+      <FontManagerModal
+        isOpen={isFontManagerOpen}
+        onClose={() => setIsFontManagerOpen(false)}
+        customFonts={customFonts}
+        onFontsUpdated={(updated) => setCustomFonts(updated)}
+        onSelectFontForActiveDoc={(fontFamily) => handleApplyFontToActiveDoc(fontFamily)}
       />
 
       {/* Manual Save Notification Toast */}

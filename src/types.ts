@@ -15,8 +15,14 @@ export interface WordDocumentData {
   fontFamily: string;
   fontSize: string;
   pageOrientation: 'portrait' | 'landscape';
-  pageSize: 'a4' | 'letter';
+  pageSize: 'a4' | 'letter' | 'legal';
   lineSpacing: '1.0' | '1.15' | '1.5' | '2.0';
+  margins?: 'normal' | 'narrow' | 'wide';
+  columns?: 1 | 2;
+  pageColor?: string;
+  watermark?: string;
+  headerText?: string;
+  footerText?: string;
 }
 
 // Excel Document Types
@@ -25,10 +31,15 @@ export interface ExcelCell {
   computed?: string | number;
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean;
+  fontFamily?: string;
+  fontSize?: number;
   color?: string;
   bg?: string;
   align?: 'left' | 'center' | 'right';
   format?: 'text' | 'number' | 'currency' | 'percent';
+  border?: 'none' | 'all' | 'box' | 'bottom';
+  comment?: string;
 }
 
 export type ExcelGridData = Record<string, ExcelCell>; // Key: "A1", "B2" etc.
@@ -41,13 +52,29 @@ export interface ExcelSheet {
   colCount: number;
 }
 
+export interface ExcelChartItem {
+  id: string;
+  type: 'bar' | 'line' | 'pie';
+  title: string;
+  labelCol: string; // e.g. "A"
+  valueCol: string; // e.g. "B"
+  startRow: number;
+  endRow: number;
+}
+
 export interface ExcelDocumentData {
   sheets: ExcelSheet[];
   activeSheetIndex: number;
+  showGridlines?: boolean;
+  showHeaders?: boolean;
+  frozenTopRow?: boolean;
+  frozenFirstCol?: boolean;
+  charts?: ExcelChartItem[];
+  isProtected?: boolean;
 }
 
 // PowerPoint Document Types
-export type SlideElementType = 'title' | 'text' | 'bullet' | 'shape' | 'metric' | 'image';
+export type SlideElementType = 'title' | 'text' | 'bullet' | 'shape' | 'metric' | 'image' | 'table' | 'quote';
 
 export interface SlideElement {
   id: string;
@@ -62,8 +89,10 @@ export interface SlideElement {
   fontColor?: string;
   bgColor?: string;
   align?: 'left' | 'center' | 'right';
-  shapeType?: 'rectangle' | 'rounded' | 'circle' | 'callout' | 'pill';
+  shapeType?: 'rectangle' | 'rounded' | 'circle' | 'callout' | 'pill' | 'star' | 'arrow';
   subtitle?: string; // For metric/card
+  animation?: 'none' | 'fade' | 'pop' | 'fly-in';
+  fontFamily?: string;
 }
 
 export interface Slide {
@@ -73,12 +102,14 @@ export interface Slide {
   textColor: string;
   elements: SlideElement[];
   notes?: string;
+  transition?: 'none' | 'fade' | 'slide-left' | 'push-up' | 'zoom';
 }
 
 export interface PowerPointDocumentData {
   slides: Slide[];
   activeSlideIndex: number;
   aspectRatio: '16:9' | '4:3';
+  theme?: string;
 }
 
 // PDF Document Types
@@ -128,3 +159,26 @@ export interface PDFDocItem extends BaseDocument {
 }
 
 export type DocumentItem = WordDocItem | ExcelDocItem | PowerPointDocItem | PDFDocItem;
+
+// Custom Font Installed Locally
+export interface CustomFontItem {
+  id: string;
+  name: string; // Font Family Name e.g. "Playfair Display", "Poppins"
+  source: 'url' | 'file'; // 'url' (e.g. Google Fonts / web css) or 'file' (.ttf, .otf, .woff, .woff2)
+  url?: string;
+  format?: 'truetype' | 'opentype' | 'woff' | 'woff2' | 'css' | 'unknown';
+  fontDataBuffer?: ArrayBuffer | string; // Binary font buffer or base64 saved in IndexedDB
+  fileSize?: string;
+  createdAt: number;
+  previewText?: string;
+}
+
+// Storage Telemetry Info
+export interface StorageUsageInfo {
+  usedBytes: number;
+  quotaBytes: number;
+  usedFormatted: string;
+  quotaFormatted: string;
+  percentUsed: string;
+  isIndexedDB: boolean;
+}

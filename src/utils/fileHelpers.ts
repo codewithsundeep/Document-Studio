@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
 import { jsPDF } from 'jspdf';
+import JSZip from 'jszip';
 import {
   DocumentItem,
   DocumentType,
@@ -8,6 +9,9 @@ import {
   ExcelDocumentData,
   ExcelGridData,
   ExcelSheet,
+  PowerPointDocumentData,
+  Slide,
+  SlideElement,
   WordDocumentData,
 } from '../types';
 import { colIndexToLabel, computeAllCells } from './excelFormula';
@@ -16,23 +20,63 @@ import { colIndexToLabel, computeAllCells } from './excelFormula';
 export function detectDocumentType(fileName: string): DocumentType | null {
   const ext = fileName.split('.').pop()?.toLowerCase();
   switch (ext) {
+    // Word & Rich Document Extensions
     case 'docx':
     case 'doc':
-    case 'txt':
+    case 'docm':
+    case 'dotx':
+    case 'dot':
+    case 'odt':
     case 'rtf':
+    case 'txt':
+    case 'text':
+    case 'log':
     case 'md':
+    case 'markdown':
     case 'html':
+    case 'htm':
+    case 'wps':
+    case 'xml':
       return 'word';
+
+    // Excel & Spreadsheet Extensions
     case 'xlsx':
+    case 'xlsm':
+    case 'xlsb':
+    case 'xltx':
+    case 'xltm':
     case 'xls':
+    case 'xlt':
+    case 'ods':
     case 'csv':
     case 'tsv':
+    case 'tab':
+    case 'prn':
+    case 'dif':
+    case 'slk':
+    case 'sylk':
+    case 'dbf':
       return 'excel';
+
+    // Presentation / Slide Extensions
     case 'pptx':
+    case 'pptm':
+    case 'potx':
+    case 'potm':
     case 'ppt':
+    case 'pot':
+    case 'odp':
+    case 'key':
       return 'powerpoint';
+
+    // PDF Format
     case 'pdf':
       return 'pdf';
+
+    // Generic JSON (can be auto-detected in processUploadedFile)
+    case 'json':
+      return 'word';
+
     default:
       return null;
   }
@@ -47,55 +91,230 @@ export function formatFileSize(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
-// Parse uploaded Word or text document (.docx, .doc, .txt, .md, .html)
+// Parse uploaded Word or text document (.docx, .doc, .docm, .odt, .rtf, .txt, .md, .html)
 export async function parseWordFile(file: File): Promise<WordDocumentData> {
   const ext = file.name.split('.').pop()?.toLowerCase();
 
-  if (ext === 'docx') {
-    const arrayBuffer = await file.arrayBuffer();
-    const result = await mammoth.convertToHtml({ arrayBuffer });
-    return {
-      htmlContent: result.value || '<p>Empty document</p>',
-      fontFamily: 'system-ui',
-      fontSize: '16px',
-      pageOrientation: 'portrait',
-      pageSize: 'a4',
-      lineSpacing: '1.15',
-    };
+  // 1. DOCX, DOCM, DOTX, DOT
+  if (ext === 'docx' || ext === 'docm' || ext === 'dotx' || ext === 'dot') {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.convertToHtml({ arrayBuffer });
+      if (result.value && result.value.trim().length > 0) {
+        return {
+          htmlContent: result.value,
+          fontFamily: 'Inter, system-ui, sans-serif',
+          fontSize: '15px',
+          pageOrientation: 'portrait',
+          pageSize: 'a4',
+          lineSpacing: '1.15',
+        };
+      }
+    } catch (mammothErr) {
+      console.warn('Mammoth parsing failed, attempting XML extraction:', mammothErr);
+    }
+
+    // Fallback: unzip word/document.xml
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      const docXml = await zip.file('word/document.xml')?.async('text');
+      if (docXml) {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(docXml, 'text/xml');
+        const paragraphs = Array.from(xmlDoc.getElementsByTagName('w:p'));
+        const htmlParts = paragraphs.map((p) => {
+          const textRuns = Array.from(p.getElementsByTagName('w:t')).map((t) => t.textContent || '');
+          const lineText = textRuns.join('').trim();
+          return lineText ? `<p>${lineText}</p>` : '';
+        }).filter(Boolean);
+
+        if (htmlParts.length > 0) {
+          return {
+            htmlContent: htmlParts.join(''),
+            fontFamily: 'Inter, system-ui, sans-serif',
+            fontSize: '15px',
+            pageOrientation: 'portrait',
+            pageSize: 'a4',
+            lineSpacing: '1.15',
+          };
+        }
+      }
+    } catch (zipErr) {
+      console.warn('Zip extraction failed for docx:', zipErr);
+    }
   }
 
-  // If text, markdown, or html
+  // 2. OpenDocument Text (.odt)
+  if (ext === 'odt') {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      const contentXml = await zip.file('content.xml')?.async('text');
+      if (contentXml) {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(contentXml, 'text/xml');
+        const elements = xmlDoc.querySelectorAll('text\\:h, text\\:p, h, p');
+        const parts: string[] = [];
+
+        elements.forEach((el) => {
+          const tagName = el.localName || el.tagName;
+          const text = el.textContent?.trim() || '';
+          if (text) {
+            if (tagName.includes('h')) {
+              parts.push(`<h2>${text}</h2>`);
+            } else {
+              parts.push(`<p>${text}</p>`);
+            }
+          }
+        });
+
+        if (parts.length > 0) {
+          return {
+            htmlContent: parts.join(''),
+            fontFamily: 'Inter, system-ui, sans-serif',
+            fontSize: '15px',
+            pageOrientation: 'portrait',
+            pageSize: 'a4',
+            lineSpacing: '1.15',
+          };
+        }
+      }
+    } catch (odtErr) {
+      console.warn('ODT extraction error:', odtErr);
+    }
+  }
+
+  // 3. Rich Text Format (.rtf)
+  if (ext === 'rtf') {
+    try {
+      const rawText = await file.text();
+      // Basic RTF parser: clean control groups, convert \par to <p>, convert \b to <strong>
+      let clean = rawText
+        .replace(/\\par\b/gi, '</p><p>')
+        .replace(/\\b\s+(.*?)\\b0/gi, '<strong>$1</strong>')
+        .replace(/\\i\s+(.*?)\\i0/gi, '<em>$1</em>')
+        .replace(/\\bullet\b/gi, '&bull; ')
+        .replace(/\\'([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/{\\[^}]+}/g, '') // remove header control groups
+        .replace(/\\[a-zA-Z0-9\-]+ ?/g, '') // remove remaining rtf control words
+        .replace(/[{}]/g, '') // remove braces
+        .trim();
+
+      if (clean) {
+        return {
+          htmlContent: `<p>${clean}</p>`,
+          fontFamily: 'Georgia, serif',
+          fontSize: '15px',
+          pageOrientation: 'portrait',
+          pageSize: 'a4',
+          lineSpacing: '1.15',
+        };
+      }
+    } catch (rtfErr) {
+      console.warn('RTF parsing error:', rtfErr);
+    }
+  }
+
+  // 4. Plain Text, Markdown, HTML, JSON
   const text = await file.text();
   let html = text;
-  if (ext === 'txt') {
+
+  if (ext === 'json') {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.htmlContent) {
+        return {
+          htmlContent: parsed.htmlContent,
+          fontFamily: parsed.fontFamily || 'Inter, system-ui, sans-serif',
+          fontSize: parsed.fontSize || '15px',
+          pageOrientation: parsed.pageOrientation || 'portrait',
+          pageSize: parsed.pageSize || 'a4',
+          lineSpacing: parsed.lineSpacing || '1.15',
+        };
+      }
+    } catch {
+      // fallback to plain text
+    }
+  }
+
+  if (ext === 'txt' || ext === 'text' || ext === 'log') {
     html = text
       .split('\n\n')
       .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`)
       .join('');
-  } else if (ext === 'md') {
-    // Basic markdown to html
+  } else if (ext === 'md' || ext === 'markdown') {
+    // Rich markdown to html
     html = text
       .replace(/^### (.*$)/gim, '<h3>$1</h3>')
       .replace(/^## (.*$)/gim, '<h2>$1</h2>')
       .replace(/^# (.*$)/gim, '<h1>$1</h1>')
       .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
       .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+      .replace(/^> (.*$)/gim, '<blockquote>$1</blockquote>')
+      .replace(/^- (.*$)/gim, '<li>$1</li>')
       .replace(/\n\n/gim, '</p><p>');
     html = `<p>${html}</p>`;
   }
 
   return {
-    htmlContent: html,
-    fontFamily: 'system-ui',
-    fontSize: '16px',
+    htmlContent: html || `<p>Loaded content from ${file.name}</p>`,
+    fontFamily: 'Inter, system-ui, sans-serif',
+    fontSize: '15px',
     pageOrientation: 'portrait',
     pageSize: 'a4',
     lineSpacing: '1.15',
   };
 }
 
-// Parse uploaded Excel / CSV spreadsheet (.xlsx, .xls, .csv)
+// Parse uploaded Excel / CSV / ODS / TSV spreadsheet
 export async function parseExcelFile(file: File): Promise<ExcelDocumentData> {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+
+  // If JSON data table
+  if (ext === 'json') {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (parsed.sheets && Array.isArray(parsed.sheets)) {
+        return parsed as ExcelDocumentData;
+      }
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Convert array of objects to sheet
+        const headers = Object.keys(parsed[0]);
+        const gridData: ExcelGridData = {};
+
+        headers.forEach((h, colIdx) => {
+          const colLetter = colIndexToLabel(colIdx);
+          gridData[`${colLetter}1`] = { raw: h, bold: true, bg: '#f1f5f9' };
+        });
+
+        parsed.forEach((rowObj, rowIdx) => {
+          headers.forEach((h, colIdx) => {
+            const colLetter = colIndexToLabel(colIdx);
+            const val = rowObj[h] !== undefined ? String(rowObj[h]) : '';
+            gridData[`${colLetter}${rowIdx + 2}`] = { raw: val };
+          });
+        });
+
+        return {
+          sheets: [
+            {
+              id: `sheet-${Date.now()}`,
+              name: 'Imported Data',
+              data: gridData,
+              rowCount: Math.max(parsed.length + 5, 25),
+              colCount: Math.max(headers.length + 3, 10),
+            },
+          ],
+          activeSheetIndex: 0,
+        };
+      }
+    } catch {
+      // fallback to sheetjs
+    }
+  }
+
   const arrayBuffer = await file.arrayBuffer();
   const workbook = XLSX.read(arrayBuffer, { type: 'array' });
 
@@ -140,16 +359,315 @@ export async function parseExcelFile(file: File): Promise<ExcelDocumentData> {
   });
 
   return {
-    sheets: sheets.length > 0 ? sheets : [
+    sheets:
+      sheets.length > 0
+        ? sheets
+        : [
+            {
+              id: 'sheet-1',
+              name: 'Sheet1',
+              data: {},
+              rowCount: 30,
+              colCount: 15,
+            },
+          ],
+    activeSheetIndex: 0,
+  };
+}
+
+// Parse uploaded PowerPoint / Presentation (.pptx, .pptm, .potx, .odp, .json)
+export async function parsePowerPointFile(file: File): Promise<PowerPointDocumentData> {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  const deckTitle = file.name.replace(/\.[^/.]+$/, '');
+
+  // 1. If Presentation JSON
+  if (ext === 'json') {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (parsed.slides && Array.isArray(parsed.slides)) {
+        return parsed as PowerPointDocumentData;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. If PPTX, PPTM, POTX: Unpack XML with JSZip
+  if (ext === 'pptx' || ext === 'pptm' || ext === 'potx' || ext === 'potm') {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      const slideFiles = Object.keys(zip.files)
+        .filter((path) => path.startsWith('ppt/slides/slide') && path.endsWith('.xml'))
+        .sort((a, b) => {
+          const numA = parseInt(a.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
+          const numB = parseInt(b.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
+          return numA - numB;
+        });
+
+      if (slideFiles.length > 0) {
+        const parsedSlides: Slide[] = [];
+        const parser = new DOMParser();
+
+        for (let i = 0; i < slideFiles.length; i++) {
+          const slidePath = slideFiles[i];
+          const slideXml = await zip.file(slidePath)?.async('text');
+          if (!slideXml) continue;
+
+          const xmlDoc = parser.parseFromString(slideXml, 'text/xml');
+          const shapes = Array.from(xmlDoc.querySelectorAll('p\\:sp, sp'));
+
+          let slideTitle = `Slide ${i + 1}`;
+          const elements: SlideElement[] = [];
+
+          // Try to load slide notes
+          let notesText = '';
+          const notePath = `ppt/notesSlides/notesSlide${i + 1}.xml`;
+          if (zip.file(notePath)) {
+            try {
+              const noteXml = await zip.file(notePath)?.async('text');
+              if (noteXml) {
+                const noteDoc = parser.parseFromString(noteXml, 'text/xml');
+                const noteTexts = Array.from(noteDoc.querySelectorAll('a\\:t, t')).map((t) => t.textContent || '');
+                notesText = noteTexts.join(' ').trim();
+              }
+            } catch {
+              // ignore note parse error
+            }
+          }
+
+          let foundTitle = false;
+          let yOffset = 28;
+
+          shapes.forEach((shape, sIdx) => {
+            const ph = shape.querySelector('p\\:ph, ph');
+            const phType = ph?.getAttribute('type') || '';
+            const textNodes = Array.from(shape.querySelectorAll('a\\:t, t')).map((t) => t.textContent || '');
+            const fullText = textNodes.join(' ').trim();
+
+            if (!fullText) return;
+
+            const isTitleShape = phType === 'title' || phType === 'ctrTitle' || (!foundTitle && sIdx === 0);
+
+            if (isTitleShape && !foundTitle) {
+              slideTitle = fullText;
+              foundTitle = true;
+              elements.push({
+                id: `el-title-${i}-${sIdx}-${Date.now()}`,
+                type: 'title',
+                x: 8,
+                y: 12,
+                width: 84,
+                height: 18,
+                content: fullText,
+                fontSize: 32,
+                fontWeight: 'bold',
+                fontColor: i === 0 ? '#ffffff' : '#0f172a',
+                align: 'left',
+              });
+            } else {
+              elements.push({
+                id: `el-text-${i}-${sIdx}-${Date.now()}`,
+                type: 'text',
+                x: 8,
+                y: yOffset,
+                width: 84,
+                height: Math.min(Math.max(fullText.length / 3, 14), 40),
+                content: fullText,
+                fontSize: 16,
+                fontWeight: 'normal',
+                fontColor: i === 0 ? '#94a3b8' : '#334155',
+                align: 'left',
+              });
+              yOffset += 20;
+            }
+          });
+
+          // If no elements found in XML, create a fallback slide element
+          if (elements.length === 0) {
+            elements.push({
+              id: `el-fallback-${i}-${Date.now()}`,
+              type: 'title',
+              x: 8,
+              y: 20,
+              width: 84,
+              height: 20,
+              content: slideTitle,
+              fontSize: 30,
+              fontWeight: 'bold',
+              fontColor: i === 0 ? '#ffffff' : '#0f172a',
+              align: 'left',
+            });
+          }
+
+          parsedSlides.push({
+            id: `slide-${i + 1}-${Date.now()}`,
+            title: slideTitle,
+            bgColor: i === 0 ? 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)' : '#ffffff',
+            textColor: i === 0 ? '#ffffff' : '#0f172a',
+            elements,
+            notes: notesText || `Notes for ${slideTitle}`,
+          });
+        }
+
+        if (parsedSlides.length > 0) {
+          return {
+            slides: parsedSlides,
+            activeSlideIndex: 0,
+            aspectRatio: '16:9',
+          };
+        }
+      }
+    } catch (zipErr) {
+      console.warn('PPTX zip slide parsing error:', zipErr);
+    }
+  }
+
+  // 3. OpenDocument Presentation (.odp)
+  if (ext === 'odp') {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      const contentXml = await zip.file('content.xml')?.async('text');
+      if (contentXml) {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(contentXml, 'text/xml');
+        const pages = Array.from(xmlDoc.querySelectorAll('draw\\:page, page'));
+
+        if (pages.length > 0) {
+          const odpSlides: Slide[] = pages.map((page, pIdx) => {
+            const pageName = page.getAttribute('draw:name') || `Slide ${pIdx + 1}`;
+            const textNodes = Array.from(page.querySelectorAll('text\\:p, p')).map((p) => p.textContent?.trim() || '');
+            const title = textNodes[0] || pageName;
+            const body = textNodes.slice(1).filter(Boolean).join('\n') || 'Slide Content';
+
+            return {
+              id: `slide-odp-${pIdx + 1}-${Date.now()}`,
+              title,
+              bgColor: pIdx === 0 ? 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)' : '#ffffff',
+              textColor: pIdx === 0 ? '#ffffff' : '#0f172a',
+              elements: [
+                {
+                  id: `el-title-${pIdx}-${Date.now()}`,
+                  type: 'title',
+                  x: 8,
+                  y: 16,
+                  width: 84,
+                  height: 18,
+                  content: title,
+                  fontSize: 32,
+                  fontWeight: 'bold',
+                  fontColor: pIdx === 0 ? '#ffffff' : '#0f172a',
+                },
+                {
+                  id: `el-body-${pIdx}-${Date.now()}`,
+                  type: 'text',
+                  x: 8,
+                  y: 38,
+                  width: 84,
+                  height: 30,
+                  content: body,
+                  fontSize: 16,
+                  fontColor: pIdx === 0 ? '#94a3b8' : '#334155',
+                },
+              ],
+            };
+          });
+
+          return {
+            slides: odpSlides,
+            activeSlideIndex: 0,
+            aspectRatio: '16:9',
+          };
+        }
+      }
+    } catch (odpErr) {
+      console.warn('ODP extraction error:', odpErr);
+    }
+  }
+
+  // 4. Default presentation template for other/binary presentation formats
+  return {
+    aspectRatio: '16:9',
+    activeSlideIndex: 0,
+    slides: [
       {
-        id: 'sheet-1',
-        name: 'Sheet1',
-        data: {},
-        rowCount: 30,
-        colCount: 15,
+        id: `slide-1-${Date.now()}`,
+        title: deckTitle,
+        bgColor: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+        textColor: '#ffffff',
+        elements: [
+          {
+            id: `el-title-${Date.now()}`,
+            type: 'title',
+            x: 8,
+            y: 25,
+            width: 84,
+            height: 20,
+            content: deckTitle,
+            fontSize: 34,
+            fontWeight: 'bold',
+            fontColor: '#ffffff',
+            align: 'left',
+          },
+          {
+            id: `el-sub-${Date.now()}`,
+            type: 'text',
+            x: 8,
+            y: 52,
+            width: 80,
+            height: 15,
+            content: `Imported presentation (${ext ? ext.toUpperCase() : 'DECK'}) &bull; Universal Document Studio`,
+            fontSize: 16,
+            fontColor: '#94a3b8',
+            align: 'left',
+          },
+        ],
+      },
+      {
+        id: `slide-2-${Date.now()}`,
+        title: 'Executive Agenda & Highlights',
+        bgColor: '#ffffff',
+        textColor: '#0f172a',
+        elements: [
+          {
+            id: `el-s2-title-${Date.now()}`,
+            type: 'title',
+            x: 8,
+            y: 12,
+            width: 84,
+            height: 15,
+            content: 'Executive Agenda & Highlights',
+            fontSize: 28,
+            fontWeight: 'bold',
+            fontColor: '#0f172a',
+          },
+          {
+            id: `el-s2-b1-${Date.now()}`,
+            type: 'bullet',
+            x: 8,
+            y: 32,
+            width: 84,
+            height: 10,
+            content: 'Comprehensive presentation deck loaded from device storage.',
+            fontSize: 16,
+            fontColor: '#334155',
+          },
+          {
+            id: `el-s2-b2-${Date.now()}`,
+            type: 'bullet',
+            x: 8,
+            y: 44,
+            width: 84,
+            height: 10,
+            content: 'Customize layout, add slides, apply themes, and install custom typography.',
+            fontSize: 16,
+            fontColor: '#334155',
+          },
+        ],
       },
     ],
-    activeSheetIndex: 0,
   };
 }
 

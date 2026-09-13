@@ -1,24 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import {
-  Bold,
-  Italic,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-  DollarSign,
-  Percent,
-  Plus,
-  Trash2,
-  FileDown,
-  Sigma,
-  TableProperties,
-  ArrowDown,
-  ArrowRight,
-  PaintBucket,
-  Palette,
-  Undo,
-} from 'lucide-react';
-import { ExcelCell, ExcelDocItem, ExcelSheet } from '../../types';
+import { Plus } from 'lucide-react';
+import { ExcelCell, ExcelDocItem, ExcelSheet, CustomFontItem } from '../../types';
 import {
   colIndexToLabel,
   computeAllCells,
@@ -27,22 +9,40 @@ import {
   parseCellKey,
 } from '../../utils/excelFormula';
 import { exportExcelFile } from '../../utils/fileHelpers';
+import { ExcelRibbon, ExcelRibbonTab } from './ExcelRibbon';
+import { ExcelChartModal } from './ExcelChartModal';
+import { ExcelFunctionWizardModal } from './ExcelFunctionWizardModal';
 
 interface ExcelEditorProps {
   document: ExcelDocItem;
   onChange: (updatedDoc: ExcelDocItem) => void;
   isReadOnly?: boolean;
+  customFonts?: CustomFontItem[];
+  onOpenFontManager?: () => void;
 }
 
-export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onChange, isReadOnly = false }) => {
+export const ExcelEditor: React.FC<ExcelEditorProps> = ({
+  document: docItem,
+  onChange,
+  isReadOnly = false,
+  customFonts = [],
+  onOpenFontManager,
+}) => {
   const activeSheetIndex = docItem.data.activeSheetIndex ?? 0;
   const currentSheet = docItem.data.sheets[activeSheetIndex] || docItem.data.sheets[0];
 
+  const [activeTab, setActiveTab] = useState<ExcelRibbonTab>('home');
   const [selectedCellKey, setSelectedCellKey] = useState<string>('A1');
   const [editingCellKey, setEditingCellKey] = useState<string | null>(null);
   const [cellInputValue, setCellInputValue] = useState<string>('');
-  const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
-  const [showBgPicker, setShowBgPicker] = useState<boolean>(false);
+  const [isChartModalOpen, setIsChartModalOpen] = useState<boolean>(false);
+  const [isFormulaWizardOpen, setIsFormulaWizardOpen] = useState<boolean>(false);
+  const [showGridlines, setShowGridlines] = useState<boolean>(true);
+  const [showHeaders, setShowHeaders] = useState<boolean>(true);
+  const [frozenTopRow, setFrozenTopRow] = useState<boolean>(false);
+  const [frozenFirstCol, setFrozenFirstCol] = useState<boolean>(false);
+  const [zoom, setZoom] = useState<number>(100);
+  const [isProtected, setIsProtected] = useState<boolean>(false);
 
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const inlineInputRef = useRef<HTMLInputElement>(null);
@@ -65,7 +65,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
 
   // Update cell value
   const handleCommitCellValue = (key: string, value: string) => {
-    if (isReadOnly) return;
+    if (isReadOnly || isProtected) return;
     const existing = currentSheet.data[key] || { raw: '' };
     const updatedData = {
       ...currentSheet.data,
@@ -96,7 +96,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
 
   // Update cell style attributes (bold, italic, align, bg, color, format)
   const handleUpdateCellStyle = (styleProps: Partial<ExcelCell>) => {
-    if (isReadOnly || !selectedCellKey) return;
+    if (isReadOnly || isProtected || !selectedCellKey) return;
     const existing = currentSheet.data[selectedCellKey] || { raw: '' };
     const updatedCell: ExcelCell = {
       ...existing,
@@ -124,13 +124,12 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
     });
   };
 
-  // Quick auto-formula insert
-  const handleInsertFormula = (formulaName: 'SUM' | 'AVERAGE' | 'COUNT' | 'MIN' | 'MAX') => {
-    if (isReadOnly || !selectedCellKey) return;
+  // Auto-formula insert
+  const handleAutoSum = (formulaName: 'SUM' | 'AVERAGE' | 'COUNT' | 'MIN' | 'MAX' = 'SUM') => {
+    if (isReadOnly || isProtected || !selectedCellKey) return;
     const parsed = parseCellKey(selectedCellKey);
     if (!parsed) return;
 
-    // By default, target the cells above in the same column
     const colLabel = colIndexToLabel(parsed.col);
     const startRow = Math.max(1, parsed.row - 5);
     const endRow = Math.max(1, parsed.row);
@@ -138,6 +137,98 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
 
     setCellInputValue(formula);
     handleCommitCellValue(selectedCellKey, formula);
+  };
+
+  // Sort current column
+  const handleSort = (direction: 'asc' | 'desc') => {
+    if (isReadOnly || isProtected) return;
+    const parsed = parseCellKey(selectedCellKey);
+    if (!parsed) return;
+    const colLabel = colIndexToLabel(parsed.col);
+
+    // Collect rows to sort (from row 2 down to rowCount)
+    const rowsToSort: { row: number; val: any; cells: Record<string, ExcelCell> }[] = [];
+    for (let r = 2; r <= currentSheet.rowCount; r++) {
+      const cell = currentSheet.data[`${colLabel}${r}`];
+      const val = cell?.computed !== undefined ? cell.computed : cell?.raw || '';
+      const rowCells: Record<string, ExcelCell> = {};
+      for (let c = 0; c < currentSheet.colCount; c++) {
+        const k = `${colIndexToLabel(c)}${r}`;
+        if (currentSheet.data[k]) {
+          rowCells[colIndexToLabel(c)] = currentSheet.data[k];
+        }
+      }
+      rowsToSort.push({ row: r, val, cells: rowCells });
+    }
+
+    rowsToSort.sort((a, b) => {
+      const aNum = parseFloat(String(a.val).replace(/[$,%]/g, ''));
+      const bNum = parseFloat(String(b.val).replace(/[$,%]/g, ''));
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return direction === 'asc' ? aNum - bNum : bNum - aNum;
+      }
+      return direction === 'asc' ? String(a.val).localeCompare(String(b.val)) : String(b.val).localeCompare(String(a.val));
+    });
+
+    const newData = { ...currentSheet.data };
+    rowsToSort.forEach((sortedRow, idx) => {
+      const targetRow = idx + 2;
+      for (let c = 0; c < currentSheet.colCount; c++) {
+        const cLabel = colIndexToLabel(c);
+        const cellData = sortedRow.cells[cLabel];
+        const targetKey = `${cLabel}${targetRow}`;
+        if (cellData) {
+          newData[targetKey] = cellData;
+        } else {
+          delete newData[targetKey];
+        }
+      }
+    });
+
+    const updatedSheets = [...docItem.data.sheets];
+    updatedSheets[activeSheetIndex] = {
+      ...currentSheet,
+      data: computeAllCells(newData),
+    };
+
+    onChange({
+      ...docItem,
+      lastModified: Date.now(),
+      data: {
+        ...docItem.data,
+        sheets: updatedSheets,
+      },
+    });
+  };
+
+  const handleClear = (type: 'all' | 'formats' | 'contents') => {
+    if (isReadOnly || isProtected || !selectedCellKey) return;
+    const existing = currentSheet.data[selectedCellKey];
+    if (!existing) return;
+
+    if (type === 'all' || type === 'contents') {
+      handleCommitCellValue(selectedCellKey, '');
+    }
+    if (type === 'all' || type === 'formats') {
+      handleUpdateCellStyle({
+        bold: false,
+        italic: false,
+        underline: false,
+        align: undefined,
+        bg: undefined,
+        color: undefined,
+        format: undefined,
+        border: undefined,
+      });
+    }
+  };
+
+  const handleAddComment = () => {
+    if (isReadOnly || isProtected || !selectedCellKey) return;
+    const comment = prompt(`Add cell note/comment to ${selectedCellKey}:`);
+    if (comment !== null) {
+      handleUpdateCellStyle({ comment: comment.trim() || undefined });
+    }
   };
 
   // Sheet operations
@@ -196,7 +287,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
 
   // Insert/Delete rows & columns
   const handleInsertRow = () => {
-    if (isReadOnly) return;
+    if (isReadOnly || isProtected) return;
     const updatedSheet: ExcelSheet = {
       ...currentSheet,
       rowCount: currentSheet.rowCount + 5,
@@ -207,10 +298,32 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
   };
 
   const handleInsertCol = () => {
-    if (isReadOnly) return;
+    if (isReadOnly || isProtected) return;
     const updatedSheet: ExcelSheet = {
       ...currentSheet,
       colCount: currentSheet.colCount + 3,
+    };
+    const updatedSheets = [...docItem.data.sheets];
+    updatedSheets[activeSheetIndex] = updatedSheet;
+    onChange({ ...docItem, data: { ...docItem.data, sheets: updatedSheets } });
+  };
+
+  const handleDeleteRow = () => {
+    if (isReadOnly || isProtected || currentSheet.rowCount <= 5) return;
+    const updatedSheet: ExcelSheet = {
+      ...currentSheet,
+      rowCount: currentSheet.rowCount - 1,
+    };
+    const updatedSheets = [...docItem.data.sheets];
+    updatedSheets[activeSheetIndex] = updatedSheet;
+    onChange({ ...docItem, data: { ...docItem.data, sheets: updatedSheets } });
+  };
+
+  const handleDeleteCol = () => {
+    if (isReadOnly || isProtected || currentSheet.colCount <= 3) return;
+    const updatedSheet: ExcelSheet = {
+      ...currentSheet,
+      colCount: currentSheet.colCount - 1,
     };
     const updatedSheets = [...docItem.data.sheets];
     updatedSheets[activeSheetIndex] = updatedSheet;
@@ -226,14 +339,12 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
         e.preventDefault();
         handleCommitCellValue(editingCellKey, cellInputValue);
         setEditingCellKey(null);
-        // Move to row below
         const nextKey = `${colIndexToLabel(col)}${row + 2}`;
         setSelectedCellKey(nextKey);
       } else if (e.key === 'Tab') {
         e.preventDefault();
         handleCommitCellValue(editingCellKey, cellInputValue);
         setEditingCellKey(null);
-        // Move to next column
         const nextKey = `${colIndexToLabel(col + 1)}${row + 1}`;
         setSelectedCellKey(nextKey);
       } else if (e.key === 'Escape') {
@@ -258,17 +369,16 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
       setSelectedCellKey(`${colIndexToLabel(col + 1)}${row + 1}`);
     } else if (e.key === 'Enter' || e.key === 'F2') {
       e.preventDefault();
-      setEditingCellKey(key);
+      if (!isProtected) setEditingCellKey(key);
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      handleCommitCellValue(key, '');
+      if (!isProtected) handleCommitCellValue(key, '');
     }
   };
 
-  // Current active cell data
   const currentActiveCell = currentSheet?.data[selectedCellKey];
 
-  // Calculate live statistics of selected / non-empty cells
+  // Calculate live statistics
   const stats = useMemo(() => {
     if (!currentSheet) return { count: 0, sum: 0, avg: 0 };
     const values: number[] = [];
@@ -287,222 +397,46 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
     };
   }, [currentSheet]);
 
-  const bgPalette = ['#ffffff', '#f8fafc', '#f1f5f9', '#e0f2fe', '#dcfce7', '#fef3c7', '#fee2e2', '#f3e8ff'];
-  const textPalette = ['#0f172a', '#1e3a8a', '#166534', '#991b1b', '#6b21a8', '#9a3412', '#475569'];
-
   return (
     <div id="excel-editor-container" className="flex flex-col h-full bg-slate-100 select-none overflow-hidden">
-      {/* Top Excel Ribbon Toolbar */}
-      <div id="excel-toolbar" className="bg-white border-b border-slate-200 px-4 py-2 flex flex-wrap items-center gap-1.5 shadow-xs z-10">
-        {/* Cell Formatting */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-slate-200">
-          <button
-            id="excel-bold-btn"
-            onClick={() => handleUpdateCellStyle({ bold: !currentActiveCell?.bold })}
-            disabled={isReadOnly}
-            title="Bold"
-            className={`p-1.5 rounded transition-colors ${
-              currentActiveCell?.bold ? 'bg-emerald-100 text-emerald-800' : 'hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            <Bold className="w-4 h-4 font-bold" />
-          </button>
-          <button
-            id="excel-italic-btn"
-            onClick={() => handleUpdateCellStyle({ italic: !currentActiveCell?.italic })}
-            disabled={isReadOnly}
-            title="Italic"
-            className={`p-1.5 rounded transition-colors ${
-              currentActiveCell?.italic ? 'bg-emerald-100 text-emerald-800' : 'hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            <Italic className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Alignment */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-slate-200">
-          <button
-            id="excel-align-left"
-            onClick={() => handleUpdateCellStyle({ align: 'left' })}
-            disabled={isReadOnly}
-            title="Align Left"
-            className={`p-1.5 rounded transition-colors ${
-              currentActiveCell?.align === 'left' ? 'bg-emerald-100 text-emerald-800' : 'hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            <AlignLeft className="w-4 h-4" />
-          </button>
-          <button
-            id="excel-align-center"
-            onClick={() => handleUpdateCellStyle({ align: 'center' })}
-            disabled={isReadOnly}
-            title="Align Center"
-            className={`p-1.5 rounded transition-colors ${
-              currentActiveCell?.align === 'center' ? 'bg-emerald-100 text-emerald-800' : 'hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            <AlignCenter className="w-4 h-4" />
-          </button>
-          <button
-            id="excel-align-right"
-            onClick={() => handleUpdateCellStyle({ align: 'right' })}
-            disabled={isReadOnly}
-            title="Align Right"
-            className={`p-1.5 rounded transition-colors ${
-              currentActiveCell?.align === 'right' ? 'bg-emerald-100 text-emerald-800' : 'hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            <AlignRight className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Number Formats */}
-        <div className="flex items-center gap-1 pr-2 border-r border-slate-200">
-          <button
-            id="excel-format-currency"
-            onClick={() => handleUpdateCellStyle({ format: currentActiveCell?.format === 'currency' ? undefined : 'currency' })}
-            disabled={isReadOnly}
-            title="Currency Format ($)"
-            className={`px-2 py-1 text-xs rounded font-medium flex items-center gap-1 transition-colors ${
-              currentActiveCell?.format === 'currency' ? 'bg-emerald-100 text-emerald-800' : 'hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            <DollarSign className="w-3.5 h-3.5" />
-            <span>Currency</span>
-          </button>
-          <button
-            id="excel-format-percent"
-            onClick={() => handleUpdateCellStyle({ format: currentActiveCell?.format === 'percent' ? undefined : 'percent' })}
-            disabled={isReadOnly}
-            title="Percentage Format (%)"
-            className={`px-2 py-1 text-xs rounded font-medium flex items-center gap-1 transition-colors ${
-              currentActiveCell?.format === 'percent' ? 'bg-emerald-100 text-emerald-800' : 'hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            <Percent className="w-3.5 h-3.5" />
-            <span>Percent</span>
-          </button>
-        </div>
-
-        {/* Cell Background & Text Color */}
-        <div className="relative flex items-center gap-1 pr-2 border-r border-slate-200">
-          <div className="relative">
-            <button
-              id="excel-fill-color-btn"
-              onClick={() => {
-                setShowBgPicker(!showBgPicker);
-                setShowColorPicker(false);
-              }}
-              disabled={isReadOnly}
-              title="Fill Color"
-              className="p-1.5 rounded hover:bg-slate-100 text-slate-700 flex items-center gap-1 transition-colors"
-            >
-              <PaintBucket className="w-4 h-4 text-emerald-600" />
-            </button>
-            {showBgPicker && (
-              <div className="absolute top-full mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 grid grid-cols-4 gap-1 z-30">
-                {bgPalette.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => {
-                      handleUpdateCellStyle({ bg: c === '#ffffff' ? undefined : c });
-                      setShowBgPicker(false);
-                    }}
-                    className="w-5 h-5 rounded border border-slate-300 hover:scale-110 transition-transform"
-                    style={{ backgroundColor: c }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="relative">
-            <button
-              id="excel-text-color-btn"
-              onClick={() => {
-                setShowColorPicker(!showColorPicker);
-                setShowBgPicker(false);
-              }}
-              disabled={isReadOnly}
-              title="Text Color"
-              className="p-1.5 rounded hover:bg-slate-100 text-slate-700 flex items-center gap-1 transition-colors"
-            >
-              <Palette className="w-4 h-4 text-blue-600" />
-            </button>
-            {showColorPicker && (
-              <div className="absolute top-full mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 grid grid-cols-4 gap-1 z-30">
-                {textPalette.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => {
-                      handleUpdateCellStyle({ color: c });
-                      setShowColorPicker(false);
-                    }}
-                    className="w-5 h-5 rounded border border-slate-300 hover:scale-110 transition-transform"
-                    style={{ backgroundColor: c }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Quick Formulas */}
-        <div className="flex items-center gap-1 pr-2 border-r border-slate-200">
-          <button
-            onClick={() => handleInsertFormula('SUM')}
-            disabled={isReadOnly}
-            title="Sum Formula"
-            className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded text-xs font-semibold flex items-center gap-1 transition-colors"
-          >
-            <Sigma className="w-3.5 h-3.5" />
-            <span>SUM</span>
-          </button>
-          <button
-            onClick={() => handleInsertFormula('AVERAGE')}
-            disabled={isReadOnly}
-            title="Average Formula"
-            className="px-2 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded text-xs font-medium transition-colors"
-          >
-            AVG
-          </button>
-        </div>
-
-        {/* Grid Dimensions */}
-        <div className="flex items-center gap-1 pr-2 border-r border-slate-200">
-          <button
-            onClick={handleInsertRow}
-            disabled={isReadOnly}
-            title="Add Rows"
-            className="px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded flex items-center gap-1"
-          >
-            <ArrowDown className="w-3.5 h-3.5" />
-            <span>+Row</span>
-          </button>
-          <button
-            onClick={handleInsertCol}
-            disabled={isReadOnly}
-            title="Add Columns"
-            className="px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded flex items-center gap-1"
-          >
-            <ArrowRight className="w-3.5 h-3.5" />
-            <span>+Col</span>
-          </button>
-        </div>
-
-        {/* Export XLSX */}
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            id="excel-export-btn"
-            onClick={() => exportExcelFile(docItem.data, docItem.name)}
-            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-medium flex items-center gap-1.5 transition-colors shadow-xs"
-          >
-            <FileDown className="w-3.5 h-3.5" />
-            <span>Export .xlsx</span>
-          </button>
-        </div>
-      </div>
+      {/* 1. Full Multi-Tab Ribbon (File, Home, Insert, Page Layout, Formulas, Data, Review, View) */}
+      <ExcelRibbon
+        document={docItem}
+        sheet={currentSheet}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        selectedCellKey={selectedCellKey}
+        activeCell={currentActiveCell}
+        isReadOnly={isReadOnly}
+        onUpdateCellStyle={handleUpdateCellStyle}
+        onInsertRow={handleInsertRow}
+        onInsertCol={handleInsertCol}
+        onDeleteRow={handleDeleteRow}
+        onDeleteCol={handleDeleteCol}
+        onAutoSum={handleAutoSum}
+        onSort={handleSort}
+        onClear={handleClear}
+        onExport={(fmt) => exportExcelFile(docItem.data, docItem.name)}
+        onPrint={() => window.print()}
+        onOpenChartModal={() => setIsChartModalOpen(true)}
+        onOpenFormulaWizard={() => setIsFormulaWizardOpen(true)}
+        showGridlines={showGridlines}
+        onToggleGridlines={() => setShowGridlines(!showGridlines)}
+        showHeaders={showHeaders}
+        onToggleHeaders={() => setShowHeaders(!showHeaders)}
+        frozenTopRow={frozenTopRow}
+        onToggleFreezeTopRow={() => setFrozenTopRow(!frozenTopRow)}
+        frozenFirstCol={frozenFirstCol}
+        onToggleFreezeFirstCol={() => setFrozenFirstCol(!frozenFirstCol)}
+        zoom={zoom}
+        onZoomChange={setZoom}
+        isProtected={isProtected}
+        onToggleProtect={() => setIsProtected(!isProtected)}
+        onAddComment={handleAddComment}
+        stats={stats}
+        customFonts={customFonts}
+        onOpenFontManager={onOpenFontManager}
+      />
 
       {/* Formula Bar */}
       <div id="excel-formula-bar" className="bg-white border-b border-slate-200 px-4 py-1.5 flex items-center gap-2 text-xs">
@@ -515,7 +449,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
           ref={formulaInputRef}
           type="text"
           value={cellInputValue}
-          disabled={isReadOnly}
+          disabled={isReadOnly || isProtected}
           onChange={(e) => setCellInputValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -530,38 +464,47 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
         />
       </div>
 
-      {/* Spreadsheet Grid Container */}
-      <div id="excel-grid-viewport" className="flex-1 overflow-auto bg-slate-100 relative">
+      {/* Spreadsheet Grid Viewport */}
+      <div
+        id="excel-grid-viewport"
+        className="flex-1 overflow-auto bg-slate-100 relative"
+        style={{ zoom: `${zoom}%` }}
+      >
         <table className="border-collapse table-fixed bg-white">
           {/* Column Header Row */}
-          <thead>
-            <tr className="bg-slate-100 text-slate-600 text-xs font-semibold sticky top-0 z-20">
-              {/* Top-left corner */}
-              <th className="w-12 min-w-12 h-7 border border-slate-300 bg-slate-200/80 sticky left-0 z-30"></th>
-              {Array.from({ length: currentSheet.colCount }).map((_, c) => {
-                const label = colIndexToLabel(c);
-                return (
-                  <th
-                    key={c}
-                    className="w-28 min-w-28 h-7 border border-slate-300 bg-slate-100 text-center font-mono font-medium text-slate-700 select-none"
-                  >
-                    {label}
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
+          {showHeaders && (
+            <thead>
+              <tr className="bg-slate-100 text-slate-600 text-xs font-semibold sticky top-0 z-20">
+                <th className="w-12 min-w-12 h-7 border border-slate-300 bg-slate-200/80 sticky left-0 z-30"></th>
+                {Array.from({ length: currentSheet.colCount }).map((_, c) => {
+                  const label = colIndexToLabel(c);
+                  return (
+                    <th
+                      key={c}
+                      className="w-28 min-w-28 h-7 border border-slate-300 bg-slate-100 text-center font-mono font-medium text-slate-700 select-none"
+                    >
+                      {label}
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+          )}
 
           {/* Grid Body */}
           <tbody>
             {Array.from({ length: currentSheet.rowCount }).map((_, r) => {
               const rowNum = r + 1;
+              const isRowFrozen = frozenTopRow && r === 0;
+
               return (
-                <tr key={r} className="h-6">
+                <tr key={r} className={`h-6 ${isRowFrozen ? 'sticky top-7 z-10 bg-slate-50 shadow-xs' : ''}`}>
                   {/* Row Header */}
-                  <td className="w-12 min-w-12 border border-slate-300 bg-slate-100 text-center font-mono text-xs text-slate-600 font-medium sticky left-0 z-10 select-none">
-                    {rowNum}
-                  </td>
+                  {showHeaders && (
+                    <td className="w-12 min-w-12 border border-slate-300 bg-slate-100 text-center font-mono text-xs text-slate-600 font-medium sticky left-0 z-10 select-none">
+                      {rowNum}
+                    </td>
+                  )}
 
                   {/* Row Cells */}
                   {Array.from({ length: currentSheet.colCount }).map((_, c) => {
@@ -570,6 +513,12 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
                     const isSelected = selectedCellKey === key;
                     const isEditing = editingCellKey === key;
                     const displayValue = formatCellValue(cell);
+                    const isColFrozen = frozenFirstCol && c === 0;
+
+                    let borderClass = showGridlines ? 'border border-slate-200' : 'border border-transparent';
+                    if (cell?.border === 'all') borderClass = 'border-2 border-slate-700';
+                    else if (cell?.border === 'bottom') borderClass = 'border-b-2 border-slate-700';
+                    else if (cell?.border === 'box') borderClass = 'border-2 border-emerald-600';
 
                     return (
                       <td
@@ -582,7 +531,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
                           }
                         }}
                         onDoubleClick={() => {
-                          if (!isReadOnly) {
+                          if (!isReadOnly && !isProtected) {
                             setEditingCellKey(key);
                           }
                         }}
@@ -591,11 +540,15 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
                         style={{
                           backgroundColor: cell?.bg || undefined,
                           color: cell?.color || undefined,
+                          fontFamily: cell?.fontFamily || undefined,
                           fontWeight: cell?.bold ? 'bold' : 'normal',
                           fontStyle: cell?.italic ? 'italic' : 'normal',
+                          textDecoration: cell?.underline ? 'underline' : 'none',
                           textAlign: cell?.align || (cell?.format === 'currency' || !isNaN(Number(cell?.raw)) ? 'right' : 'left'),
                         }}
-                        className={`w-28 min-w-28 px-1.5 py-0.5 border border-slate-200 text-xs font-sans relative truncate transition-all cursor-cell outline-hidden ${
+                        className={`w-28 min-w-28 px-1.5 py-0.5 ${borderClass} text-xs font-sans relative truncate transition-all cursor-cell outline-hidden ${
+                          isColFrozen ? 'sticky left-12 z-10' : ''
+                        } ${
                           isSelected
                             ? 'ring-2 ring-emerald-600 ring-inset z-10 bg-emerald-50/20'
                             : 'hover:bg-slate-50/80'
@@ -615,6 +568,14 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
                           />
                         ) : (
                           <span className="block truncate">{displayValue}</span>
+                        )}
+
+                        {/* Little cell comment marker */}
+                        {cell?.comment && (
+                          <div
+                            className="absolute top-0 right-0 w-0 h-0 border-t-6 border-t-amber-500 border-l-6 border-l-transparent"
+                            title={`Note: ${cell.comment}`}
+                          />
                         )}
 
                         {/* Little cell drag handle when selected */}
@@ -685,10 +646,10 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
           )}
         </div>
 
-        {/* Selected Range Stats */}
+        {/* Selected Range Live Statistics */}
         <div className="flex items-center gap-4 text-slate-600 font-mono text-[11px] pr-2">
           <span>
-            Active: <strong className="text-slate-800">{selectedCellKey}</strong>
+            Cell: <strong className="text-slate-800">{selectedCellKey}</strong>
           </span>
           <span>
             Count: <strong className="text-slate-800">{stats.count}</strong>
@@ -701,6 +662,24 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ document: docItem, onC
           </span>
         </div>
       </div>
+
+      {/* Recommended Chart Modal */}
+      <ExcelChartModal
+        isOpen={isChartModalOpen}
+        onClose={() => setIsChartModalOpen(false)}
+        sheet={currentSheet}
+      />
+
+      {/* Formula Wizard Modal */}
+      <ExcelFunctionWizardModal
+        isOpen={isFormulaWizardOpen}
+        onClose={() => setIsFormulaWizardOpen(false)}
+        selectedCellKey={selectedCellKey}
+        onInsertFunction={(formula) => {
+          setCellInputValue(formula);
+          handleCommitCellValue(selectedCellKey, formula);
+        }}
+      />
     </div>
   );
 };

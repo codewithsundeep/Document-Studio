@@ -1,43 +1,43 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Play,
   Plus,
   Trash2,
   Copy,
   ChevronUp,
   ChevronDown,
-  Type,
-  List,
-  Square,
-  BarChart2,
-  Palette,
-  Maximize2,
   ChevronLeft,
   ChevronRight,
-  FileDown,
-  MessageSquare,
 } from 'lucide-react';
-import { PowerPointDocItem, Slide, SlideElement, SlideElementType } from '../../types';
+import { PowerPointDocItem, Slide, SlideElement, SlideElementType, CustomFontItem } from '../../types';
 import { triggerDownload } from '../../utils/fileHelpers';
+import { PowerPointRibbon, PowerpointRibbonTab } from './PowerPointRibbon';
+import { PowerPointSlideSorterModal } from './PowerPointSlideSorterModal';
 
 interface PowerPointEditorProps {
   document: PowerPointDocItem;
   onChange: (updatedDoc: PowerPointDocItem) => void;
   isReadOnly?: boolean;
+  customFonts?: CustomFontItem[];
+  onOpenFontManager?: () => void;
 }
 
 export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
   document: docItem,
   onChange,
   isReadOnly = false,
+  customFonts = [],
+  onOpenFontManager,
 }) => {
   const activeSlideIndex = docItem.data.activeSlideIndex ?? 0;
   const currentSlide = docItem.data.slides[activeSlideIndex] || docItem.data.slides[0];
 
+  const [activeTab, setActiveTab] = useState<PowerpointRibbonTab>('home');
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [isPresenting, setIsPresenting] = useState<boolean>(false);
   const [showNotes, setShowNotes] = useState<boolean>(false);
-  const [showBgPicker, setShowBgPicker] = useState<boolean>(false);
+  const [isSlideSorterOpen, setIsSlideSorterOpen] = useState<boolean>(false);
+  const [aspectRatio, setAspectRatio] = useState<'16:9' | '4:3'>('16:9');
+  const [transitionEffect, setTransitionEffect] = useState<string>('Fade');
 
   // Fullscreen keyboard controls for presenter mode
   useEffect(() => {
@@ -79,8 +79,8 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
     const newSlide: Slide = {
       id: `slide-${Date.now()}`,
       title: `Slide ${docItem.data.slides.length + 1}`,
-      bgColor: '#ffffff',
-      textColor: '#0f172a',
+      bgColor: currentSlide ? currentSlide.bgColor : '#ffffff',
+      textColor: currentSlide ? currentSlide.textColor : '#0f172a',
       notes: '',
       elements: [
         {
@@ -93,7 +93,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
           content: 'New Presentation Slide Title',
           fontSize: 30,
           fontWeight: 'bold',
-          fontColor: '#0f172a',
+          fontColor: currentSlide ? currentSlide.textColor : '#0f172a',
           align: 'left',
         },
         {
@@ -123,7 +123,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
     });
   };
 
-  const handleDuplicateSlide = (index: number) => {
+  const handleDuplicateSlide = (index = activeSlideIndex) => {
     if (isReadOnly) return;
     const target = docItem.data.slides[index];
     const duplicated: Slide = {
@@ -146,7 +146,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
     });
   };
 
-  const handleDeleteSlide = (index: number) => {
+  const handleDeleteSlide = (index = activeSlideIndex) => {
     if (isReadOnly || docItem.data.slides.length <= 1) return;
     const newSlides = docItem.data.slides.filter((_, i) => i !== index);
     onChange({
@@ -160,7 +160,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
     });
   };
 
-  const handleMoveSlide = (index: number, direction: 'up' | 'down') => {
+  const handleMoveSlide = (direction: 'up' | 'down', index = activeSlideIndex) => {
     if (isReadOnly) return;
     const newSlides = [...docItem.data.slides];
     const targetIdx = direction === 'up' ? index - 1 : index + 1;
@@ -230,7 +230,10 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
           subtitle: 'Customer Retention Rate',
           fontSize: 28,
           fontColor: '#2563eb',
-          bgColor: currentSlide.bgColor.includes('slate') || currentSlide.bgColor.includes('#0') ? 'rgba(30,41,59,0.7)' : '#f1f5f9',
+          bgColor:
+            currentSlide.bgColor.includes('slate') || currentSlide.bgColor.includes('#0')
+              ? 'rgba(30,41,59,0.7)'
+              : '#f1f5f9',
           align: 'center',
         };
         break;
@@ -283,8 +286,8 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
     setSelectedElementId(id);
   };
 
-  const handleUpdateElement = (elId: string, updates: Partial<SlideElement>) => {
-    if (isReadOnly || !currentSlide) return;
+  const handleUpdateElement = (updates: Partial<SlideElement>, elId = selectedElementId) => {
+    if (isReadOnly || !currentSlide || !elId) return;
     const updatedElements = currentSlide.elements.map((el) => (el.id === elId ? { ...el, ...updates } : el));
 
     const updatedSlides = [...docItem.data.slides];
@@ -303,8 +306,8 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
     });
   };
 
-  const handleDeleteElement = (elId: string) => {
-    if (isReadOnly || !currentSlide) return;
+  const handleDeleteElement = (elId = selectedElementId) => {
+    if (isReadOnly || !currentSlide || !elId) return;
     const updatedElements = currentSlide.elements.filter((el) => el.id !== elId);
     const updatedSlides = [...docItem.data.slides];
     updatedSlides[activeSlideIndex] = {
@@ -336,7 +339,6 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
         slides: updatedSlides,
       },
     });
-    setShowBgPicker(false);
   };
 
   const handleExportSlidesJson = () => {
@@ -345,172 +347,55 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
     triggerDownload(blob, `${docItem.name.replace(/\.[^/.]+$/, '')}.presentation.json`);
   };
 
-  const backgroundThemes = [
-    { name: 'Pure White', bg: '#ffffff', text: '#0f172a' },
-    { name: 'Executive Dark', bg: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', text: '#ffffff' },
-    { name: 'Navy Gradient', bg: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)', text: '#ffffff' },
-    { name: 'Emerald Forest', bg: 'linear-gradient(135deg, #064e3b 0%, #047857 100%)', text: '#ffffff' },
-    { name: 'Clean Warm', bg: '#f8fafc', text: '#1e293b' },
-    { name: 'Dusk Velvet', bg: 'linear-gradient(135deg, #3b0764 0%, #6b21a8 100%)', text: '#ffffff' },
-  ];
-
   const selectedElement = currentSlide?.elements.find((el) => el.id === selectedElementId);
 
   return (
     <div id="powerpoint-editor-container" className="flex flex-col h-full bg-slate-100 select-none overflow-hidden">
-      {/* Top PowerPoint Ribbon Toolbar */}
-      <div id="powerpoint-toolbar" className="bg-white border-b border-slate-200 px-4 py-2 flex flex-wrap items-center gap-2 shadow-xs z-10">
-        {/* Present / Slide Show Button */}
-        <button
-          id="ppt-present-btn"
-          onClick={() => setIsPresenting(true)}
-          className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
-        >
-          <Play className="w-3.5 h-3.5 fill-current" />
-          <span>Present Slides</span>
-        </button>
-
-        {/* Add Elements Group */}
-        <div className="flex items-center gap-1 pl-2 border-l border-slate-200">
-          <button
-            id="ppt-add-title-btn"
-            onClick={() => handleAddElement('title')}
-            disabled={isReadOnly}
-            className="px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1 transition-colors"
-          >
-            <Type className="w-3.5 h-3.5 text-orange-600" />
-            <span>Title</span>
-          </button>
-          <button
-            id="ppt-add-text-btn"
-            onClick={() => handleAddElement('text')}
-            disabled={isReadOnly}
-            className="px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1 transition-colors"
-          >
-            <span className="font-serif italic font-bold text-xs text-slate-500">T</span>
-            <span>Text Box</span>
-          </button>
-          <button
-            id="ppt-add-bullet-btn"
-            onClick={() => handleAddElement('bullet')}
-            disabled={isReadOnly}
-            className="px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1 transition-colors"
-          >
-            <List className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Bullets</span>
-          </button>
-          <button
-            id="ppt-add-metric-btn"
-            onClick={() => handleAddElement('metric')}
-            disabled={isReadOnly}
-            className="px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1 transition-colors"
-          >
-            <BarChart2 className="w-3.5 h-3.5 text-blue-600" />
-            <span>Metric</span>
-          </button>
-          <button
-            id="ppt-add-shape-btn"
-            onClick={() => handleAddElement('shape')}
-            disabled={isReadOnly}
-            className="px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1 transition-colors"
-          >
-            <Square className="w-3.5 h-3.5 text-purple-600" />
-            <span>Shape</span>
-          </button>
-        </div>
-
-        {/* Slide Theme Background */}
-        <div className="relative flex items-center pl-2 border-l border-slate-200">
-          <button
-            id="ppt-theme-btn"
-            onClick={() => setShowBgPicker(!showBgPicker)}
-            disabled={isReadOnly}
-            className="px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 rounded flex items-center gap-1.5 transition-colors"
-          >
-            <Palette className="w-3.5 h-3.5 text-slate-600" />
-            <span>Slide Theme</span>
-          </button>
-          {showBgPicker && (
-            <div className="absolute top-full mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex flex-col gap-1 w-44 z-30">
-              {backgroundThemes.map((theme) => (
-                <button
-                  key={theme.name}
-                  onClick={() => handleUpdateSlideBg(theme.bg, theme.text)}
-                  className="px-2.5 py-1 text-xs text-left rounded hover:bg-slate-100 flex items-center justify-between text-slate-700"
-                >
-                  <span>{theme.name}</span>
-                  <div
-                    className="w-4 h-4 rounded-full border border-slate-300"
-                    style={{ background: theme.bg }}
-                  />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Selected Element Quick Styler */}
-        {selectedElement && !isReadOnly && (
-          <div className="flex items-center gap-1.5 pl-3 border-l border-orange-200 bg-orange-50/70 py-0.5 px-2 rounded">
-            <span className="text-[11px] text-orange-900 font-semibold uppercase">{selectedElement.type}</span>
-            <input
-              type="number"
-              min="10"
-              max="72"
-              value={selectedElement.fontSize || 16}
-              onChange={(e) => handleUpdateElement(selectedElement.id, { fontSize: parseInt(e.target.value, 10) || 16 })}
-              className="w-12 px-1 py-0.5 text-xs bg-white border border-orange-300 rounded font-mono"
-            />
-            <button
-              onClick={() =>
-                handleUpdateElement(selectedElement.id, {
-                  fontWeight: selectedElement.fontWeight === 'bold' ? 'normal' : 'bold',
-                })
-              }
-              className={`p-1 rounded text-xs font-bold ${
-                selectedElement.fontWeight === 'bold' ? 'bg-orange-200 text-orange-900' : 'text-slate-600'
-              }`}
-            >
-              B
-            </button>
-            <button
-              onClick={() => handleDeleteElement(selectedElement.id)}
-              className="p-1 text-red-600 hover:bg-red-50 rounded"
-              title="Delete element"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Right Tools */}
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={() => setShowNotes(!showNotes)}
-            className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors ${
-              showNotes ? 'bg-slate-200 text-slate-800' : 'hover:bg-slate-100 text-slate-600'
-            }`}
-          >
-            <MessageSquare className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Speaker Notes</span>
-          </button>
-
-          <button
-            onClick={handleExportSlidesJson}
-            className="px-2.5 py-1 text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded flex items-center gap-1 transition-colors"
-          >
-            <FileDown className="w-3.5 h-3.5" />
-            <span>Export</span>
-          </button>
-        </div>
-      </div>
+      {/* 1. Authentic PowerPoint Ribbon Toolbar */}
+      <PowerPointRibbon
+        document={docItem}
+        currentSlide={currentSlide}
+        activeSlideIndex={activeSlideIndex}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        selectedElement={selectedElement}
+        isReadOnly={isReadOnly}
+        onStartPresentation={(fromBeginning) => {
+          if (fromBeginning) {
+            handleSelectSlide(0);
+          }
+          setIsPresenting(true);
+        }}
+        onAddSlide={handleAddSlide}
+        onDuplicateSlide={() => handleDuplicateSlide(activeSlideIndex)}
+        onDeleteSlide={() => handleDeleteSlide(activeSlideIndex)}
+        onMoveSlide={(dir) => handleMoveSlide(dir, activeSlideIndex)}
+        onAddElement={handleAddElement}
+        onUpdateElement={handleUpdateElement}
+        onDeleteElement={handleDeleteElement}
+        onUpdateSlideBg={handleUpdateSlideBg}
+        onExport={handleExportSlidesJson}
+        onPrint={() => window.print()}
+        showNotes={showNotes}
+        onToggleNotes={() => setShowNotes(!showNotes)}
+        onOpenSlideSorter={() => setIsSlideSorterOpen(true)}
+        aspectRatio={aspectRatio}
+        onToggleAspectRatio={() => setAspectRatio(aspectRatio === '16:9' ? '4:3' : '16:9')}
+        transitionEffect={transitionEffect}
+        onSetTransitionEffect={setTransitionEffect}
+        onApplyTransitionToAll={() => alert(`Applied "${transitionEffect}" transition to all slides!`)}
+        customFonts={customFonts}
+        onOpenFontManager={onOpenFontManager}
+      />
 
       {/* Main Studio Body: Left Thumbnails + Center Slide Stage */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Slide Carousel Rail */}
         <div id="ppt-slide-thumbnails" className="w-48 sm:w-56 bg-white border-r border-slate-200 flex flex-col overflow-y-auto p-3 gap-3 select-none">
           <div className="flex items-center justify-between pb-1 border-b border-slate-100">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Slides ({docItem.data.slides.length})</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              Slides ({docItem.data.slides.length})
+            </span>
             {!isReadOnly && (
               <button
                 id="ppt-add-slide-btn"
@@ -541,9 +426,9 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
                     <span className="truncate max-w-[110px] font-medium">{slide.title}</span>
                   </div>
 
-                  {/* Thumbnail Preview Aspect Box (16:9) */}
+                  {/* Thumbnail Preview Aspect Box */}
                   <div
-                    className="w-full aspect-video rounded overflow-hidden shadow-2xs relative p-1.5 flex flex-col justify-between"
+                    className={`w-full ${aspectRatio === '16:9' ? 'aspect-video' : 'aspect-4/3'} rounded overflow-hidden shadow-2xs relative p-1.5 flex flex-col justify-between`}
                     style={{ background: slide.bgColor }}
                   >
                     <div
@@ -554,10 +439,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
                     </div>
                     <div className="flex gap-1">
                       {slide.elements.slice(1, 3).map((el) => (
-                        <div
-                          key={el.id}
-                          className="h-1.5 flex-1 rounded-xs bg-slate-400/40"
-                        />
+                        <div key={el.id} className="h-1.5 flex-1 rounded-xs bg-slate-400/40" />
                       ))}
                     </div>
                   </div>
@@ -568,7 +450,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleMoveSlide(index, 'up');
+                          handleMoveSlide('up', index);
                         }}
                         disabled={index === 0}
                         className="p-1 hover:bg-slate-100 text-slate-600 disabled:opacity-30"
@@ -600,7 +482,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleMoveSlide(index, 'down');
+                          handleMoveSlide('down', index);
                         }}
                         disabled={index === docItem.data.slides.length - 1}
                         className="p-1 hover:bg-slate-100 text-slate-600 disabled:opacity-30"
@@ -623,9 +505,11 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
             className="flex-1 overflow-auto p-4 md:p-8 flex items-center justify-center relative"
             onClick={() => setSelectedElementId(null)}
           >
-            {/* 16:9 Presentation Canvas Box */}
+            {/* Presentation Canvas Box */}
             <div
-              className="w-full max-w-4xl aspect-video rounded-lg shadow-xl relative overflow-hidden transition-all select-text"
+              className={`w-full ${
+                aspectRatio === '16:9' ? 'max-w-4xl aspect-video' : 'max-w-3xl aspect-4/3'
+              } rounded-lg shadow-xl relative overflow-hidden transition-all select-text animate-in fade-in duration-200`}
               style={{
                 background: currentSlide?.bgColor || '#ffffff',
                 color: currentSlide?.textColor || '#0f172a',
@@ -649,12 +533,13 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
                       width: `${el.width}%`,
                       minHeight: `${el.height}%`,
                       fontSize: `${el.fontSize || 16}px`,
+                      fontFamily: el.fontFamily || undefined,
                       color: el.fontColor || currentSlide.textColor,
                       background: el.bgColor || 'transparent',
                       textAlign: el.align || 'left',
                       fontWeight: el.fontWeight || 'normal',
                     }}
-                    className={`absolute p-2 transition-shadow cursor-pointer ${
+                    className={`absolute p-2 transition-all cursor-pointer ${
                       isSelected && !isReadOnly ? 'ring-2 ring-orange-500 ring-offset-1 rounded' : ''
                     } ${el.shapeType === 'pill' ? 'rounded-full px-3' : ''} ${
                       el.shapeType === 'rounded' ? 'rounded-xl p-4' : ''
@@ -664,7 +549,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
                     <div
                       contentEditable={!isReadOnly}
                       suppressContentEditableWarning
-                      onBlur={(e) => handleUpdateElement(el.id, { content: e.currentTarget.innerText })}
+                      onBlur={(e) => handleUpdateElement({ content: e.currentTarget.innerText }, el.id)}
                       className="outline-none whitespace-pre-line"
                     >
                       {el.content}
@@ -675,7 +560,7 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
                       <div
                         contentEditable={!isReadOnly}
                         suppressContentEditableWarning
-                        onBlur={(e) => handleUpdateElement(el.id, { subtitle: e.currentTarget.innerText })}
+                        onBlur={(e) => handleUpdateElement({ subtitle: e.currentTarget.innerText }, el.id)}
                         className="text-xs text-slate-400 mt-1 outline-none font-normal"
                       >
                         {el.subtitle}
@@ -724,7 +609,9 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
         <div id="ppt-fullscreen-presenter" className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
           {/* Main Slide Stage */}
           <div
-            className="w-full max-w-6xl aspect-video rounded-md shadow-2xl relative overflow-hidden select-none transition-all p-12 flex flex-col justify-center"
+            className={`w-full ${
+              aspectRatio === '16:9' ? 'max-w-6xl aspect-video' : 'max-w-4xl aspect-4/3'
+            } rounded-md shadow-2xl relative overflow-hidden select-none transition-all p-12 flex flex-col justify-center animate-in zoom-in-95 duration-200`}
             style={{
               background: currentSlide?.bgColor || '#ffffff',
               color: currentSlide?.textColor || '#0f172a',
@@ -786,6 +673,20 @@ export const PowerPointEditor: React.FC<PowerPointEditorProps> = ({
           </div>
         </div>
       )}
+
+      {/* Slide Sorter Modal */}
+      <PowerPointSlideSorterModal
+        isOpen={isSlideSorterOpen}
+        onClose={() => setIsSlideSorterOpen(false)}
+        slides={docItem.data.slides}
+        activeSlideIndex={activeSlideIndex}
+        onSelectSlide={handleSelectSlide}
+        onAddSlide={handleAddSlide}
+        onDuplicateSlide={(idx) => handleDuplicateSlide(idx)}
+        onDeleteSlide={(idx) => handleDeleteSlide(idx)}
+        onStartPresentation={() => setIsPresenting(true)}
+        isReadOnly={isReadOnly}
+      />
     </div>
   );
 };

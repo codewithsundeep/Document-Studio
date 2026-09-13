@@ -1,56 +1,45 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Bold,
-  Italic,
-  Underline,
-  Strikethrough,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-  AlignJustify,
-  List,
-  ListOrdered,
-  Heading1,
-  Heading2,
-  Heading3,
-  Quote,
-  Table as TableIcon,
-  Image as ImageIcon,
-  Link as LinkIcon,
-  Minus,
   Search,
   ZoomIn,
   ZoomOut,
-  RotateCcw,
-  RotateCw,
-  FileDown,
-  Printer,
-  Eye,
-  Edit3,
   X,
-  Palette,
-  Highlighter,
+  FileDown,
 } from 'lucide-react';
-import { WordDocItem } from '../../types';
+import { WordDocItem, CustomFontItem } from '../../types';
 import { exportWordFile } from '../../utils/fileHelpers';
+import { WordRibbon, WordRibbonTab } from './WordRibbon';
+import { WordStatsModal } from './WordStatsModal';
 
 interface WordEditorProps {
   document: WordDocItem;
   onChange: (updatedDoc: WordDocItem) => void;
   isReadOnly?: boolean;
+  customFonts?: CustomFontItem[];
+  onOpenFontManager?: () => void;
 }
 
-export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onChange, isReadOnly = false }) => {
+export const WordEditor: React.FC<WordEditorProps> = ({
+  document: docItem,
+  onChange,
+  isReadOnly = false,
+  customFonts = [],
+  onOpenFontManager,
+}) => {
   const editorRef = useRef<HTMLDivElement>(null);
+  const [activeTab, setActiveTab] = useState<WordRibbonTab>('home');
   const [zoom, setZoom] = useState<number>(100);
-  const [viewMode, setViewMode] = useState<'page' | 'continuous'>('page');
+  const [viewMode, setViewMode] = useState<'page' | 'continuous' | 'focus'>('page');
   const [wordCount, setWordCount] = useState<number>(0);
   const [charCount, setCharCount] = useState<number>(0);
+  const [paragraphCount, setParagraphCount] = useState<number>(1);
   const [showFindReplace, setShowFindReplace] = useState<boolean>(false);
   const [findQuery, setFindQuery] = useState<string>('');
   const [replaceQuery, setReplaceQuery] = useState<string>('');
-  const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
-  const [showHighlightPicker, setShowHighlightPicker] = useState<boolean>(false);
+  const [showStatsModal, setShowStatsModal] = useState<boolean>(false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
+  const [showRuler, setShowRuler] = useState<boolean>(true);
+  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
 
   // Initialize editor content
   useEffect(() => {
@@ -66,6 +55,9 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
     const words = text.trim().split(/\s+/).filter(Boolean).length;
     setWordCount(words);
     setCharCount(text.length);
+
+    const paragraphs = text.split(/\n+/).filter((p) => p.trim().length > 0).length;
+    setParagraphCount(Math.max(1, paragraphs));
   };
 
   const handleInput = () => {
@@ -91,38 +83,49 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
     handleInput();
   };
 
-  const handleInsertTable = () => {
+  const handleUpdateDocumentData = (patch: Partial<WordDocItem['data']>) => {
     if (isReadOnly) return;
+    onChange({
+      ...docItem,
+      lastModified: Date.now(),
+      data: {
+        ...docItem.data,
+        ...patch,
+      },
+    });
+  };
+
+  const handleInsertTable = (rows = 3, cols = 3) => {
+    if (isReadOnly) return;
+    let headerCells = '';
+    for (let c = 1; c <= cols; c++) {
+      headerCells += `<th style="border: 1px solid #cbd5e1; padding: 8px 12px; background-color: #f1f5f9; text-align: left; font-weight: 600;">Header ${c}</th>`;
+    }
+    let bodyRows = '';
+    for (let r = 1; r <= rows; r++) {
+      let rowCells = '';
+      for (let c = 1; c <= cols; c++) {
+        rowCells += `<td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell ${r},${c}</td>`;
+      }
+      bodyRows += `<tr>${rowCells}</tr>`;
+    }
+
     const tableHtml = `
-      <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-        <thead>
-          <tr style="background-color: #f1f5f9;">
-            <th style="border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left;">Header 1</th>
-            <th style="border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left;">Header 2</th>
-            <th style="border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left;">Header 3</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell 1</td>
-            <td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell 2</td>
-            <td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell 3</td>
-          </tr>
-          <tr>
-            <td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell 4</td>
-            <td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell 5</td>
-            <td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell 6</td>
-          </tr>
-        </tbody>
+      <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px;">
+        <thead><tr>${headerCells}</tr></thead>
+        <tbody>${bodyRows}</tbody>
       </table>
-      <p></p>
+      <p><br /></p>
     `;
     execCmd('insertHTML', tableHtml);
   };
 
   const handleInsertImage = () => {
     if (isReadOnly) return;
-    const url = prompt('Enter image URL (or paste image data):', 'https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=800&q=80');
+    const url = prompt(
+      'Enter image URL or paste an image link:',
+      'https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=800&q=80'
+    );
     if (url) {
       execCmd('insertImage', url);
     }
@@ -136,10 +139,100 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
     }
   };
 
+  const handleInsertSymbol = (symbol: string) => {
+    execCmd('insertText', symbol);
+  };
+
+  const handleInsertCallout = (type: 'tip' | 'warning' | 'info') => {
+    const config = {
+      tip: { bg: '#ecfdf5', border: '#10b981', title: '💡 Pro Tip', text: 'Add actionable advice here.' },
+      warning: { bg: '#fffbeb', border: '#f59e0b', title: '⚠️ Important Note', text: 'Verify these conditions carefully.' },
+      info: { bg: '#eff6ff', border: '#3b82f6', title: 'ℹ️ Information', text: 'Reference details for this section.' },
+    }[type];
+
+    const html = `
+      <div style="background-color: ${config.bg}; border-left: 4px solid ${config.border}; padding: 12px 16px; margin: 12px 0; border-radius: 4px; font-size: 13px;">
+        <strong style="display: block; margin-bottom: 4px;">${config.title}</strong>
+        <span>${config.text}</span>
+      </div>
+      <p></p>
+    `;
+    execCmd('insertHTML', html);
+  };
+
+  const handleGenerateTOC = () => {
+    if (!editorRef.current) return;
+    const headings = editorRef.current.querySelectorAll('h1, h2, h3');
+    if (headings.length === 0) {
+      alert('No headings (H1, H2, or H3) found in document. Please format some section titles first!');
+      return;
+    }
+
+    let tocHtml = `
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+        <h3 style="margin-top:0; margin-bottom: 12px; font-size: 14px; font-weight: 700; color: #1e293b; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">Table of Contents</h3>
+        <ul style="margin: 0; padding-left: 20px; list-style-type: none;">
+    `;
+
+    headings.forEach((h, idx) => {
+      const tag = h.tagName.toLowerCase();
+      const text = h.textContent || `Section ${idx + 1}`;
+      const indent = tag === 'h1' ? '0px' : tag === 'h2' ? '16px' : '32px';
+      const weight = tag === 'h1' ? '600' : '400';
+      tocHtml += `
+        <li style="margin-bottom: 6px; padding-left: ${indent};">
+          <span style="font-weight: ${weight}; color: #2563eb;">${text}</span>
+        </li>
+      `;
+    });
+
+    tocHtml += `
+        </ul>
+      </div>
+      <p></p>
+    `;
+    execCmd('insertHTML', tocHtml);
+  };
+
+  const handleInsertFootnote = () => {
+    const num = Math.floor(Math.random() * 9) + 1;
+    execCmd('insertHTML', `<sup style="color: #2563eb; font-weight: bold; cursor: pointer;" title="Footnote reference ${num}">[${num}]</sup>&nbsp;`);
+  };
+
+  const handleInsertCitation = () => {
+    const author = prompt('Enter author and year (e.g. Smith, 2025):', 'Smith, 2025');
+    if (author) {
+      execCmd('insertHTML', `<em>(${author})</em>&nbsp;`);
+    }
+  };
+
+  // Text to Speech Read Aloud
+  const handleToggleSpeech = () => {
+    if (!('speechSynthesis' in window)) {
+      alert('Speech synthesis is not supported by your browser.');
+      return;
+    }
+
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    } else {
+      const text = editorRef.current?.innerText || '';
+      if (!text.trim()) {
+        alert('Document is empty, nothing to read aloud.');
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+      setIsSpeaking(true);
+    }
+  };
+
   const handleFindReplace = () => {
     if (!findQuery || !editorRef.current) return;
     const currentHtml = editorRef.current.innerHTML;
-    // Replace occurrences safely
     const regex = new RegExp(findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
     const newHtml = currentHtml.replace(regex, replaceQuery);
     editorRef.current.innerHTML = newHtml;
@@ -151,337 +244,53 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
   };
 
   const readingTimeMinutes = Math.max(1, Math.ceil(wordCount / 200));
+  const speakingTimeMinutes = Math.max(1, Math.ceil(wordCount / 130));
 
-  const textColors = ['#000000', '#1e3a8a', '#047857', '#b91c1c', '#7c3aed', '#c2410c', '#475569'];
-  const highlightColors = ['#fef08a', '#bbf7d0', '#fed7aa', '#fbcfe8', '#bae6fd', 'transparent'];
+  // Determine margin styles
+  const marginPadding = {
+    narrow: 'p-6 md:p-8',
+    wide: 'p-12 md:p-20',
+    normal: 'p-8 md:p-14',
+  }[docItem.data.margins || 'normal'];
 
   return (
     <div id="word-editor-container" className="flex flex-col h-full bg-slate-100 select-text overflow-hidden">
-      {/* Top Word Ribbon Toolbar */}
-      <div id="word-toolbar" className="bg-white border-b border-slate-200 px-4 py-2 flex flex-wrap items-center gap-1.5 shadow-xs z-10">
-        {/* Undo / Redo */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-slate-200">
-          <button
-            id="word-undo-btn"
-            onClick={() => execCmd('undo')}
-            disabled={isReadOnly}
-            title="Undo (Ctrl+Z)"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 disabled:opacity-40 transition-colors"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
-          <button
-            id="word-redo-btn"
-            onClick={() => execCmd('redo')}
-            disabled={isReadOnly}
-            title="Redo (Ctrl+Y)"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 disabled:opacity-40 transition-colors"
-          >
-            <RotateCw className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Heading / Style Selector */}
-        <div className="flex items-center pr-2 border-r border-slate-200">
-          <select
-            id="word-format-block-select"
-            disabled={isReadOnly}
-            onChange={(e) => execCmd('formatBlock', e.target.value)}
-            defaultValue="p"
-            className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-blue-500 font-medium"
-          >
-            <option value="p">Normal Text</option>
-            <option value="h1">Heading 1</option>
-            <option value="h2">Heading 2</option>
-            <option value="h3">Heading 3</option>
-            <option value="blockquote">Quote</option>
-            <option value="pre">Code Block</option>
-          </select>
-        </div>
-
-        {/* Font Family */}
-        <div className="flex items-center pr-2 border-r border-slate-200">
-          <select
-            id="word-font-family-select"
-            disabled={isReadOnly}
-            onChange={(e) => execCmd('fontName', e.target.value)}
-            defaultValue="Inter, system-ui"
-            className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-hidden focus:ring-1 focus:ring-blue-500 font-medium w-28"
-          >
-            <option value="Inter, system-ui">Modern Sans</option>
-            <option value="Georgia, serif">Classic Serif</option>
-            <option value="Courier New, monospace">Monospace</option>
-            <option value="Arial, sans-serif">Arial</option>
-            <option value="Times New Roman, serif">Times Roman</option>
-          </select>
-        </div>
-
-        {/* Basic Text Formatting */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-slate-200">
-          <button
-            id="word-bold-btn"
-            onClick={() => execCmd('bold')}
-            disabled={isReadOnly}
-            title="Bold (Ctrl+B)"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 font-bold disabled:opacity-40 transition-colors"
-          >
-            <Bold className="w-4 h-4" />
-          </button>
-          <button
-            id="word-italic-btn"
-            onClick={() => execCmd('italic')}
-            disabled={isReadOnly}
-            title="Italic (Ctrl+I)"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 disabled:opacity-40 transition-colors"
-          >
-            <Italic className="w-4 h-4" />
-          </button>
-          <button
-            id="word-underline-btn"
-            onClick={() => execCmd('underline')}
-            disabled={isReadOnly}
-            title="Underline (Ctrl+U)"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 disabled:opacity-40 transition-colors"
-          >
-            <Underline className="w-4 h-4" />
-          </button>
-          <button
-            id="word-strike-btn"
-            onClick={() => execCmd('strikeThrough')}
-            disabled={isReadOnly}
-            title="Strikethrough"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 disabled:opacity-40 transition-colors"
-          >
-            <Strikethrough className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Text Color & Highlight */}
-        <div className="relative flex items-center gap-1 pr-2 border-r border-slate-200">
-          <div className="relative">
-            <button
-              id="word-color-picker-toggle"
-              onClick={() => {
-                setShowColorPicker(!showColorPicker);
-                setShowHighlightPicker(false);
-              }}
-              disabled={isReadOnly}
-              title="Text Color"
-              className="p-1.5 rounded hover:bg-slate-100 text-slate-700 flex items-center gap-1 transition-colors"
-            >
-              <Palette className="w-4 h-4 text-blue-600" />
-            </button>
-            {showColorPicker && (
-              <div className="absolute top-full mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex gap-1 z-30">
-                {textColors.map((color) => (
-                  <button
-                    key={color}
-                    onClick={() => {
-                      execCmd('foreColor', color);
-                      setShowColorPicker(false);
-                    }}
-                    className="w-5 h-5 rounded-full border border-slate-300 hover:scale-110 transition-transform"
-                    style={{ backgroundColor: color }}
-                    title={color}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="relative">
-            <button
-              id="word-highlight-picker-toggle"
-              onClick={() => {
-                setShowHighlightPicker(!showHighlightPicker);
-                setShowColorPicker(false);
-              }}
-              disabled={isReadOnly}
-              title="Highlight Color"
-              className="p-1.5 rounded hover:bg-slate-100 text-slate-700 flex items-center gap-1 transition-colors"
-            >
-              <Highlighter className="w-4 h-4 text-amber-500" />
-            </button>
-            {showHighlightPicker && (
-              <div className="absolute top-full mt-1 left-0 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex gap-1 z-30">
-                {highlightColors.map((color) => (
-                  <button
-                    key={color}
-                    onClick={() => {
-                      execCmd('hiliteColor', color);
-                      setShowHighlightPicker(false);
-                    }}
-                    className="w-5 h-5 rounded-full border border-slate-300 hover:scale-110 transition-transform flex items-center justify-center text-[10px]"
-                    style={{ backgroundColor: color }}
-                    title={color === 'transparent' ? 'Clear' : color}
-                  >
-                    {color === 'transparent' ? '✕' : ''}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Alignment */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-slate-200">
-          <button
-            id="word-align-left-btn"
-            onClick={() => execCmd('justifyLeft')}
-            disabled={isReadOnly}
-            title="Align Left"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <AlignLeft className="w-4 h-4" />
-          </button>
-          <button
-            id="word-align-center-btn"
-            onClick={() => execCmd('justifyCenter')}
-            disabled={isReadOnly}
-            title="Align Center"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <AlignCenter className="w-4 h-4" />
-          </button>
-          <button
-            id="word-align-right-btn"
-            onClick={() => execCmd('justifyRight')}
-            disabled={isReadOnly}
-            title="Align Right"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <AlignRight className="w-4 h-4" />
-          </button>
-          <button
-            id="word-align-justify-btn"
-            onClick={() => execCmd('justifyFull')}
-            disabled={isReadOnly}
-            title="Justify"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <AlignJustify className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Lists & Insertables */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-slate-200">
-          <button
-            id="word-bullet-list-btn"
-            onClick={() => execCmd('insertUnorderedList')}
-            disabled={isReadOnly}
-            title="Bullet List"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <List className="w-4 h-4" />
-          </button>
-          <button
-            id="word-numbered-list-btn"
-            onClick={() => execCmd('insertOrderedList')}
-            disabled={isReadOnly}
-            title="Numbered List"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <ListOrdered className="w-4 h-4" />
-          </button>
-          <button
-            id="word-insert-table-btn"
-            onClick={handleInsertTable}
-            disabled={isReadOnly}
-            title="Insert Table"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <TableIcon className="w-4 h-4" />
-          </button>
-          <button
-            id="word-insert-image-btn"
-            onClick={handleInsertImage}
-            disabled={isReadOnly}
-            title="Insert Image"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <ImageIcon className="w-4 h-4" />
-          </button>
-          <button
-            id="word-insert-link-btn"
-            onClick={handleInsertLink}
-            disabled={isReadOnly}
-            title="Insert Link"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <LinkIcon className="w-4 h-4" />
-          </button>
-          <button
-            id="word-insert-divider-btn"
-            onClick={() => execCmd('insertHorizontalRule')}
-            disabled={isReadOnly}
-            title="Horizontal Divider"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-700 transition-colors"
-          >
-            <Minus className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Tools: Find & Replace, Print, View Toggle */}
-        <div className="flex items-center gap-1 ml-auto">
-          <button
-            id="word-find-replace-toggle"
-            onClick={() => setShowFindReplace(!showFindReplace)}
-            className={`p-1.5 rounded text-xs flex items-center gap-1 ${
-              showFindReplace ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-600'
-            }`}
-            title="Find & Replace"
-          >
-            <Search className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Find</span>
-          </button>
-
-          <button
-            id="word-print-btn"
-            onClick={handlePrint}
-            title="Print Document"
-            className="p-1.5 rounded hover:bg-slate-100 text-slate-600 transition-colors"
-          >
-            <Printer className="w-4 h-4" />
-          </button>
-
-          {/* Export Menu */}
-          <div className="relative group">
-            <button
-              id="word-download-dropdown-btn"
-              className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium flex items-center gap-1 transition-colors shadow-xs"
-            >
-              <FileDown className="w-3.5 h-3.5" />
-              <span>Export</span>
-            </button>
-            <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-white border border-slate-200 rounded-lg shadow-lg py-1 w-44 z-30">
-              <button
-                onClick={() => exportWordFile(docItem.data, docItem.name, 'doc')}
-                className="px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium"
-              >
-                Download as Word (.doc)
-              </button>
-              <button
-                onClick={() => exportWordFile(docItem.data, docItem.name, 'pdf')}
-                className="px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium"
-              >
-                Download as PDF (.pdf)
-              </button>
-              <button
-                onClick={() => exportWordFile(docItem.data, docItem.name, 'html')}
-                className="px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium"
-              >
-                Download as HTML (.html)
-              </button>
-              <button
-                onClick={() => exportWordFile(docItem.data, docItem.name, 'txt')}
-                className="px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium"
-              >
-                Download Plain Text (.txt)
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* 1. Full Authentic Word Multi-Tab Ribbon */}
+      <WordRibbon
+        document={docItem}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onExecCmd={execCmd}
+        isReadOnly={isReadOnly}
+        wordCount={wordCount}
+        charCount={charCount}
+        zoom={zoom}
+        onZoomChange={setZoom}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        isDarkMode={isDarkMode}
+        onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+        showRuler={showRuler}
+        onToggleRuler={() => setShowRuler(!showRuler)}
+        onExport={(fmt) => exportWordFile(docItem.data, docItem.name, fmt as any)}
+        onPrint={handlePrint}
+        onInsertTable={handleInsertTable}
+        onInsertImage={handleInsertImage}
+        onInsertLink={handleInsertLink}
+        onInsertSymbol={handleInsertSymbol}
+        onInsertCallout={handleInsertCallout}
+        onGenerateTOC={handleGenerateTOC}
+        onInsertFootnote={handleInsertFootnote}
+        onInsertCitation={handleInsertCitation}
+        onOpenStatsModal={() => setShowStatsModal(true)}
+        onToggleFindReplace={() => setShowFindReplace(!showFindReplace)}
+        isFindReplaceOpen={showFindReplace}
+        isSpeaking={isSpeaking}
+        onToggleSpeech={handleToggleSpeech}
+        onUpdateDocumentData={handleUpdateDocumentData}
+        customFonts={customFonts}
+        onOpenFontManager={onOpenFontManager}
+      />
 
       {/* Find and Replace Popover Bar */}
       {showFindReplace && (
@@ -524,28 +333,63 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
         </div>
       )}
 
+      {/* Top Document Ruler (when enabled) */}
+      {showRuler && viewMode !== 'focus' && (
+        <div className="bg-white border-b border-slate-200 h-5 px-8 flex items-center justify-between text-[9px] text-slate-400 font-mono select-none overflow-hidden">
+          <div className="flex items-center gap-6">
+            <span>0</span>
+            <span>1"</span>
+            <span>2"</span>
+            <span>3"</span>
+            <span>4"</span>
+            <span>5"</span>
+            <span>6"</span>
+            <span>7"</span>
+            <span>8"</span>
+          </div>
+          <div className="text-[10px] text-slate-500 font-sans">Margins: {docItem.data.margins || 'normal'}</div>
+        </div>
+      )}
+
       {/* Main Document Body Canvas */}
       <div
         id="word-viewport"
-        className="flex-1 overflow-y-auto p-4 md:p-8 flex justify-center bg-slate-200/70"
-        style={{
-          perspective: '1000px',
-        }}
+        className={`flex-1 overflow-y-auto p-4 md:p-8 flex justify-center transition-colors ${
+          isDarkMode ? 'bg-slate-900 text-slate-100' : 'bg-slate-200/70'
+        }`}
       >
         <div
           id="word-document-page"
-          className={`bg-white text-slate-800 transition-all duration-150 ${
-            viewMode === 'page'
-              ? 'w-full max-w-[850px] min-h-[1100px] p-8 md:p-14 shadow-lg border border-slate-300 rounded-sm'
-              : 'w-full max-w-4xl p-6 shadow-sm border border-slate-200'
+          className={`relative transition-all duration-150 ${
+            viewMode === 'focus'
+              ? 'w-full max-w-2xl p-8 bg-transparent shadow-none border-none'
+              : viewMode === 'page'
+              ? `w-full ${
+                  docItem.data.pageOrientation === 'landscape' ? 'max-w-[1100px] min-h-[850px]' : 'max-w-[850px] min-h-[1100px]'
+                } ${marginPadding} shadow-lg border border-slate-300 rounded-xs`
+              : 'w-full max-w-4xl p-6 shadow-xs border border-slate-200'
           }`}
           style={{
             zoom: `${zoom}%`,
+            backgroundColor: isDarkMode ? '#0f172a' : docItem.data.pageColor || '#ffffff',
+            color: isDarkMode ? '#f8fafc' : '#0f172a',
             fontFamily: docItem.data.fontFamily || 'Inter, system-ui, sans-serif',
             fontSize: docItem.data.fontSize || '15px',
             lineHeight: docItem.data.lineSpacing || '1.6',
+            columnCount: docItem.data.columns === 2 ? 2 : 1,
+            columnGap: '40px',
           }}
         >
+          {/* Watermark Overlay (if enabled) */}
+          {docItem.data.watermark && (
+            <div
+              className="absolute inset-0 flex items-center justify-center pointer-events-none select-none opacity-10 text-slate-700 font-extrabold text-7xl uppercase tracking-widest rotate-[-35deg]"
+              style={{ zIndex: 0 }}
+            >
+              {docItem.data.watermark}
+            </div>
+          )}
+
           {/* Authentic Editable Canvas */}
           <div
             id="word-content-editable"
@@ -553,7 +397,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
             contentEditable={!isReadOnly}
             suppressContentEditableWarning
             onInput={handleInput}
-            className="outline-none min-h-[900px] focus:ring-0 selection:bg-blue-100"
+            className="outline-none min-h-[900px] focus:ring-0 selection:bg-blue-200 relative z-10"
           />
         </div>
       </div>
@@ -562,32 +406,17 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
       <div id="word-status-bar" className="bg-white border-t border-slate-200 px-4 py-1.5 flex items-center justify-between text-xs text-slate-500 select-none">
         <div className="flex items-center gap-4">
           <span>Page 1 of 1</span>
-          <span>{wordCount.toLocaleString()} words</span>
+          <button
+            onClick={() => setShowStatsModal(true)}
+            className="hover:text-blue-600 underline underline-offset-2 transition-colors cursor-pointer"
+          >
+            {wordCount.toLocaleString()} words
+          </button>
           <span>{charCount.toLocaleString()} characters</span>
           <span className="hidden sm:inline">~{readingTimeMinutes} min read</span>
         </div>
 
         <div className="flex items-center gap-3">
-          {/* View Mode Toggle */}
-          <div className="flex items-center bg-slate-100 rounded p-0.5 border border-slate-200">
-            <button
-              onClick={() => setViewMode('page')}
-              className={`px-2 py-0.5 text-[11px] rounded font-medium transition-colors ${
-                viewMode === 'page' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Page View
-            </button>
-            <button
-              onClick={() => setViewMode('continuous')}
-              className={`px-2 py-0.5 text-[11px] rounded font-medium transition-colors ${
-                viewMode === 'continuous' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Web Flow
-            </button>
-          </div>
-
           {/* Zoom Slider / Controls */}
           <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
             <button
@@ -608,6 +437,18 @@ export const WordEditor: React.FC<WordEditorProps> = ({ document: docItem, onCha
           </div>
         </div>
       </div>
+
+      {/* Document Statistics Modal */}
+      <WordStatsModal
+        isOpen={showStatsModal}
+        onClose={() => setShowStatsModal(false)}
+        document={docItem}
+        wordCount={wordCount}
+        charCount={charCount}
+        paragraphCount={paragraphCount}
+        readingTimeMinutes={readingTimeMinutes}
+        speakingTimeMinutes={speakingTimeMinutes}
+      />
     </div>
   );
 };
