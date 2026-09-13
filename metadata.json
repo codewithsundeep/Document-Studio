@@ -1,0 +1,6 @@
+{
+  "name": "Document Viewer and Editor",
+  "description": "Android installable universal document viewer and editor for Word, Excel, PowerPoint, and PDF files with default file associations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
